@@ -1,56 +1,74 @@
-# Welcome to your Expo app 👋
+# 5LC Task Control
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A simple, mobile-first **Task & Accountability** app for **FIVE LASER CUT**.
+One Android APK with role-based screens: Director (company-wide control),
+Head/Manager (team + downline), Employee (own tasks). Backend authority lives in
+Supabase (PostgreSQL + RLS + RPC); the APK is only the interface.
 
-## Get started
+> Every commitment gets an owner. Every owner gets a deadline. Every deadline
+> gets tracked. Every delay has a reason. Every completion is recorded.
 
-1. Install dependencies
+## Stack
+- **App:** Expo + Expo Router + React Native + TypeScript (Android)
+- **Backend:** Supabase (PostgreSQL, Auth, Row Level Security, RPC) — see `supabase/`
+- **Push:** Firebase Cloud Messaging via `expo-notifications`
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+## Structure
+```
+src/
+  app/            Expo Router screens
+                    index            login (Employee ID + password)
+                    forgot-password  reset link by email
+                    dashboard        role-aware KPIs + quick actions
+                    tasks            my tasks
+                    task-detail      status, comments, history, extension,
+                                     delegation chain (parent + sub-tasks)
+                    create-task      create / delegate a sub-task
+                    extensions       approve / reject requests
+                    notifications    in-app notification feed
+                    team             my downline + open workloads
+                    reports          status breakdown + most overdue
+                    recurring        repeat task templates
+                    settings         profile, sign out
+  constants/      brand palette + shared status/priority/reason labels
+  lib/            supabase client + auth helpers + push registration
+supabase/
+  migrations/     Database schema + RLS + RPC + escalation engine (backend-as-code)
+  functions/      dispatch-notifications (FCM push + email delivery)
+assets/           App icon + brand logo only (kept minimal for a small APK)
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Features
+- **Roles & hierarchy** enforced in the database (RLS), not in the app
+- Login by **Employee ID**, password reset by email
+- Create / assign / **delegate sub-tasks** (full chain visible, drill-down)
+- Status lifecycle: Not Started / In Progress / Waiting / Completed / Rejected
+- Priorities: Low / Normal / High / Urgent
+- **Overdue tracking + escalation** (configurable thresholds in `system_settings`)
+- **Extension workflow** with reason categories and approver decision
+- **Automatic reminders**: due-today, morning pending, daily overdue, escalation
+  (pg_cron → notification rows; `dispatch-notifications` delivers push + email)
+- **Recurring tasks** (daily / weekly / monthly templates)
+- Immutable **audit history** per task; comments
+- Director/Manager **team + reports** views
 
-### Other setup steps
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## Develop
+```bash
+npm install
+npx expo start          # dev server (use a development build for push)
+npm run typecheck       # tsc --noEmit
+```
 
-## Learn more
+## Build the release APK
+```bash
+npx eas-cli build --platform android --profile production
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+## Security model (important)
+Role and hierarchy are enforced **in the database** (`supabase/migrations/0003`
+and `0004`), never only by hiding UI in the app. Do not weaken those policies.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+**Read [`SECURITY.md`](./SECURITY.md)** for the full security model, the public
+vs secret key rules, the dashboard settings to apply, and the security audit
+script (`supabase/diagnostics/security_audit.sql`).

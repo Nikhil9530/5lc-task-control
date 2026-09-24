@@ -32,6 +32,13 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env.production
+
+# secrets - NEVER commit these
+service-account*.json
+*-service-account.json
+*.keystore
+google-services-private*.json
 
 # typescript
 *.tsbuildinfo
@@ -41,3 +48,16 @@ example
 # generated native folders
 /ios
 /android
+
+# local environment files
+.env
+
+# local build/test artifacts
+dist-t/
+*.log
+
+# Supabase CLI local state
+supabase/.temp/
+
+# Supabase CLI local state
+supabase/.temp/

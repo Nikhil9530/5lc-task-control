@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "104717608748",
+    "project_id": "flc-task-control",
+    "storage_bucket": "flc-task-control.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:104717608748:android:d95a340dd178d353766e89",
+        "android_client_info": {
+          "package_name": "flc.task_controler"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD2gvPvgWkZY5s5TDoZ-BVAxAVYY0g4WxI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
