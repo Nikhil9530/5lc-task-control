@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -8,15 +8,16 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { goBack, nav } from '../../lib/navigation';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../../lib/supabase';
-import { getCurrentProfile } from '../../lib/auth';
-import { COLORS, EXTENSION_REASONS, statusColor } from '../constants/app';
+import { getMyId, getSessionProfile } from '../../lib/auth';
+import { AppPress, Skeleton } from '../../lib/ui';
+import { COLORS, EXTENSION_REASONS, statusColor, allowedNextStatuses, type TaskActor } from '../constants/app';
 
 type TaskStatus =
   | 'not_started'
@@ -36,6 +37,10 @@ type Task = {
   created_at: string;
   completed_at: string | null;
   parent_task_id: string | null;
+  // Needed to decide WHO may drive the status (see migration 0020):
+  // the assignee reports progress, everyone above them reviews.
+  assigned_to: string | null;
+  assigned_by: string | null;
 };
 
 type TaskHistory = {
@@ -109,12 +114,19 @@ export default function TaskDetailScreen() {
   // Only managers and above may delegate (employees never see the button).
   const [canDelegate, setCanDelegate] = useState(false);
 
+  // Who am I, so the status controls can match the server-side governance in
+  // migration 0020 (assignee reports progress; upline reviews; director overrides).
+  const [meId, setMeId] = useState('');
+  const [meRole, setMeRole] = useState('');
+
   useEffect(() => {
     (async () => {
-      const me = await getCurrentProfile();
+      const me = await getSessionProfile();
       setCanDelegate(
         !!me && ['head', 'manager', 'director', 'super_admin'].includes(me.role)
       );
+      setMeId(me?.id ?? '');
+      setMeRole(me?.role ?? '');
     })();
   }, []);
 
@@ -154,11 +166,10 @@ async function addComment() {
 
   setCommentSending(true);
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Cached local session read instead of an auth-server round-trip.
+  const userId = await getMyId();
 
-  if (!user) {
+  if (!userId) {
     setCommentSending(false);
     Alert.alert('Error', 'You are not logged in.');
     return;
@@ -168,7 +179,7 @@ async function addComment() {
     .from('task_comments')
     .insert({
       task_id: id,
-      user_id: user.id,
+      user_id: userId,
       comment: commentText.trim(),
     })
     .select(`
@@ -223,7 +234,7 @@ async function loadChain() {
     const { data, error } = await supabase
       .from('tasks')
       .select(
-        'id, title, description, priority, status, due_date, start_date, created_at, completed_at, parent_task_id'
+        'id, title, description, priority, status, due_date, start_date, created_at, completed_at, parent_task_id, assigned_to, assigned_by'
       )
       .eq('id', id)
       .single();
@@ -236,7 +247,7 @@ async function loadChain() {
         'Unable to load this task.'
       );
 
-      router.back();
+      goBack();
       return;
     }
 
@@ -320,7 +331,7 @@ async function confirmStatusUpdate() {
     })
     .eq('id', task.id)
     .select(
-      'id, title, description, priority, status, due_date, start_date, created_at, completed_at, parent_task_id'
+      'id, title, description, priority, status, due_date, start_date, created_at, completed_at, parent_task_id, assigned_to, assigned_by'
     )
     .single();
 
@@ -358,6 +369,43 @@ async function confirmStatusUpdate() {
     setSelectedStatus(null);
   }
 
+  // ---- WHO MAY MOVE THIS TASK -----------------------------------------------
+  // Mirrors migration 0020. The database is still the authority - if this ever
+  // drifts, the server rejects the write and the error is shown to the user.
+  //   doer     - the task is assigned to me: I report progress.
+  //   reviewer - I assigned it, or I am above the assignee: I accept/reject.
+  //   admin    - director / super admin: full override.
+  const isDoer = !!task && !!meId && task.assigned_to === meId;
+  const isAdmin = ['director', 'super_admin'].includes(meRole);
+  const isReviewer =
+    !!task &&
+    !isDoer &&
+    (task.assigned_by === meId ||
+      ['head', 'manager', 'director', 'super_admin'].includes(meRole));
+
+  const actor: TaskActor = isAdmin ? 'admin' : isDoer ? 'doer' : 'reviewer';
+
+  // Only statuses the server will actually accept are offered.
+  const nextStatuses = task ? allowedNextStatuses(task.status, actor) : [];
+
+  // Why the controls are hidden, phrased for whoever is looking.
+  function statusLockedReason(): string {
+    if (!task) return '';
+
+    if (task.status === 'completed') {
+      return 'This task is completed and locked. Only a manager or director can reopen it.';
+    }
+    if (task.status === 'rejected') {
+      return 'This task was rejected. Only a manager or director can send it back for rework.';
+    }
+    if (!isDoer) {
+      return isReviewer
+        ? 'This work is assigned to someone else, so only they can move it forward. You will be notified when it is completed and can then accept or reject it.'
+        : 'This work is assigned to someone else and you are not in its chain of command, so you cannot change it.';
+    }
+    return 'No further status change is available for this task.';
+  }
+
   function formatPriority(priority: string) {
     return priority.toUpperCase();
   }
@@ -386,13 +434,44 @@ async function confirmStatusUpdate() {
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.center}>
-          <ActivityIndicator size="large" />
+        {/* Skeleton holds the layout so the task content fades in instead of
+            popping - same feel as the rest of the app. */}
+        <View style={styles.header}>
+          <AppPress onPress={() => goBack()} style={styles.backButton}>
+            <Text style={styles.backText}>‹</Text>
+          </AppPress>
 
-          <Text style={styles.loadingText}>
-            Loading task...
-          </Text>
+          <View>
+            <Text style={styles.headerTitle}>Task Details</Text>
+            <Text style={styles.headerSubtitle}>Task information</Text>
+          </View>
         </View>
+
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.content}
+        >
+          <View style={styles.card}>
+            <Skeleton width="80%" height={20} />
+            <View style={{ height: 14 }} />
+            <Skeleton width="100%" height={12} />
+            <View style={{ height: 8 }} />
+            <Skeleton width="70%" height={12} />
+            <View style={{ height: 20 }} />
+            <View style={{ flexDirection: 'row', gap: 24 }}>
+              <Skeleton width={100} height={38} />
+              <Skeleton width={100} height={38} />
+            </View>
+          </View>
+
+          <View style={styles.actionCard}>
+            <Skeleton width={140} height={18} />
+            <View style={{ height: 14 }} />
+            <Skeleton width="90%" height={12} />
+            <View style={{ height: 16 }} />
+            <Skeleton width="100%" height={44} radius={10} />
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -407,12 +486,12 @@ async function confirmStatusUpdate() {
     <SafeAreaView style={styles.container}>
       {/* HEADER */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
+        <AppPress
+          onPress={() => goBack()}
           style={styles.backButton}
         >
           <Text style={styles.backText}>‹</Text>
-        </TouchableOpacity>
+        </AppPress>
 
         <View>
           <Text style={styles.headerTitle}>
@@ -525,11 +604,10 @@ async function confirmStatusUpdate() {
           </Text>
 
           {parentTask && (
-            <TouchableOpacity
+            <AppPress
               style={styles.parentLink}
-              activeOpacity={0.8}
               onPress={() =>
-                router.push({
+                nav({
                   pathname: '/task-detail',
                   params: { id: parentTask.id },
                 })
@@ -542,7 +620,7 @@ async function confirmStatusUpdate() {
                   {parentTask.title}
                 </Text>
               </View>
-            </TouchableOpacity>
+            </AppPress>
           )}
 
           {subtasks.length > 0 && (
@@ -552,12 +630,11 @@ async function confirmStatusUpdate() {
               </Text>
 
               {subtasks.map((s) => (
-                <TouchableOpacity
+                <AppPress
                   key={s.id}
                   style={styles.subtaskRow}
-                  activeOpacity={0.85}
                   onPress={() =>
-                    router.push({
+                    nav({
                       pathname: '/task-detail',
                       params: { id: s.id },
                     })
@@ -575,17 +652,16 @@ async function confirmStatusUpdate() {
                   <Text style={styles.subtaskMeta}>
                     {s.due_date || 'No deadline'}
                   </Text>
-                </TouchableOpacity>
+                </AppPress>
               ))}
             </View>
           )}
 
           {canDelegate && (
-            <TouchableOpacity
+            <AppPress
               style={styles.delegateButton}
-              activeOpacity={0.85}
               onPress={() =>
-                router.push({
+                nav({
                   pathname: '/create-task',
                   params: { parentTaskId: task.id, parentTitle: task.title },
                 })
@@ -595,7 +671,7 @@ async function confirmStatusUpdate() {
               <Text style={styles.delegateButtonText}>
                 DELEGATE AS SUB-TASK
               </Text>
-            </TouchableOpacity>
+            </AppPress>
           )}
         </View>
 
@@ -606,11 +682,19 @@ async function confirmStatusUpdate() {
           </Text>
 
           <Text style={styles.actionSubtitle}>
-            Select the new status for this task.
+            {nextStatuses.length === 0
+              ? 'No status change is available to you.'
+              : 'Select the new status for this task.'}
           </Text>
 
+          {nextStatuses.length === 0 && (
+            <Text style={styles.statusLockedNote}>{statusLockedReason()}</Text>
+          )}
+
           <View style={styles.statusList}>
-            {statusOptions.map((option) => {
+            {statusOptions
+              .filter((option) => nextStatuses.includes(option.value))
+              .map((option) => {
               const current =
                 task.status === option.value;
 
@@ -618,7 +702,7 @@ async function confirmStatusUpdate() {
                 selectedStatus === option.value;
 
               return (
-                <TouchableOpacity
+                <AppPress
                   key={option.value}
                   style={[
                     styles.statusButton,
@@ -627,7 +711,6 @@ async function confirmStatusUpdate() {
                     selected &&
                       styles.statusButtonSelected,
                   ]}
-                  activeOpacity={0.8}
                   disabled={updating}
                   onPress={() =>
                     selectStatus(option.value)
@@ -672,7 +755,7 @@ async function confirmStatusUpdate() {
                       </Text>
                     </View>
                   )}
-                </TouchableOpacity>
+                </AppPress>
               );
             })}
           </View>
@@ -697,7 +780,7 @@ async function confirmStatusUpdate() {
               </Text>
 
               <View style={styles.confirmButtons}>
-                <TouchableOpacity
+                <AppPress
                   style={styles.cancelButton}
                   onPress={cancelStatusUpdate}
                   disabled={updating}
@@ -705,9 +788,9 @@ async function confirmStatusUpdate() {
                   <Text style={styles.cancelButtonText}>
                     CANCEL
                   </Text>
-                </TouchableOpacity>
+                </AppPress>
 
-                <TouchableOpacity
+                <AppPress
                   style={[
                     styles.confirmButton,
                     updating &&
@@ -728,7 +811,7 @@ async function confirmStatusUpdate() {
                       CONFIRM UPDATE
                     </Text>
                   )}
-                </TouchableOpacity>
+                </AppPress>
               </View>
             </View>
           )}
@@ -745,9 +828,8 @@ async function confirmStatusUpdate() {
   </Text>
 
   {!showExtensionForm ? (
-    <TouchableOpacity
+    <AppPress
       style={styles.extensionButton}
-      activeOpacity={0.8}
       onPress={() => setShowExtensionForm(true)}
     >
       <Ionicons
@@ -759,7 +841,7 @@ async function confirmStatusUpdate() {
       <Text style={styles.extensionButtonText}>
         REQUEST EXTENSION
       </Text>
-    </TouchableOpacity>
+    </AppPress>
   ) : (
     <View>
       <Text style={styles.extensionLabel}>
@@ -801,9 +883,8 @@ async function confirmStatusUpdate() {
         </View>
       ) : (
         <>
-          <TouchableOpacity
+          <AppPress
             style={styles.extensionInput}
-            activeOpacity={0.8}
             onPress={() => setShowDatePicker(true)}
           >
             <View
@@ -828,7 +909,7 @@ async function confirmStatusUpdate() {
                 color="#E87516"
               />
             </View>
-          </TouchableOpacity>
+          </AppPress>
 
           {showDatePicker && (
             <DateTimePicker
@@ -884,10 +965,9 @@ async function confirmStatusUpdate() {
         {EXTENSION_REASONS.map((r) => {
           const active = extensionCategory === r;
           return (
-            <TouchableOpacity
+            <AppPress
               key={r}
               style={[styles.reasonChip, active && styles.reasonChipActive]}
-              activeOpacity={0.8}
               onPress={() => setExtensionCategory(r)}
             >
               <Text
@@ -898,7 +978,7 @@ async function confirmStatusUpdate() {
               >
                 {r}
               </Text>
-            </TouchableOpacity>
+            </AppPress>
           );
         })}
       </View>
@@ -923,7 +1003,7 @@ async function confirmStatusUpdate() {
 
 
       <View style={styles.extensionButtons}>
-        <TouchableOpacity
+        <AppPress
           style={styles.extensionCancelButton}
           onPress={() => {
             setShowExtensionForm(false);
@@ -936,9 +1016,9 @@ async function confirmStatusUpdate() {
           <Text style={styles.extensionCancelText}>
             CANCEL
           </Text>
-        </TouchableOpacity>
+        </AppPress>
 
-        <TouchableOpacity
+        <AppPress
           style={[
             styles.extensionSubmitButton,
             extensionSending &&
@@ -990,11 +1070,10 @@ async function confirmStatusUpdate() {
 
             setExtensionSending(true);
 
-            const {
-              data: { user },
-            } = await supabase.auth.getUser();
+            // Cached local session read instead of an auth-server round-trip.
+            const userId = await getMyId();
 
-            if (!user) {
+            if (!userId) {
               setExtensionSending(false);
               Alert.alert(
                 'Error',
@@ -1007,7 +1086,7 @@ async function confirmStatusUpdate() {
               .from('task_extensions')
               .insert({
                 task_id: task.id,
-                requested_by: user.id,
+                requested_by: userId,
                 old_due_date: task.due_date,
                 requested_due_date: extensionDate.trim(),
                 reason: extensionReason.trim()
@@ -1055,7 +1134,7 @@ async function confirmStatusUpdate() {
               SUBMIT REQUEST
             </Text>
           )}
-        </TouchableOpacity>
+        </AppPress>
       </View>
     </View>
     )}
@@ -1276,7 +1355,7 @@ async function confirmStatusUpdate() {
               style={styles.commentInput}
             />
 
-            <TouchableOpacity
+            <AppPress
               style={[
                 styles.commentSendButton,
                 (!commentText.trim() || commentSending) &&
@@ -1297,7 +1376,7 @@ async function confirmStatusUpdate() {
                   color="#FFFFFF"
                 />
               )}
-            </TouchableOpacity>
+            </AppPress>
           </View>
         </View>
 
@@ -1473,6 +1552,17 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 4,
     marginBottom: 14,
+  },
+
+  // Shown in place of the status buttons when the viewer is not allowed to
+  // move this task - explains the workflow instead of silently hiding controls.
+  statusLockedNote: {
+    color: COLORS.textSoft,
+    fontSize: 12,
+    lineHeight: 18,
+    backgroundColor: COLORS.bg,
+    borderRadius: 10,
+    padding: 12,
   },
 
   statusList: {

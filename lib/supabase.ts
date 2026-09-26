@@ -1,11 +1,53 @@
 import 'react-native-url-polyfill/auto';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_KEY!;
+/**
+ * Supabase config resolution - resilient by design.
+ *
+ * WHY THIS IS NOT JUST `process.env.EXPO_PUBLIC_*`:
+ * `process.env.EXPO_PUBLIC_*` is inlined by Metro at BUILD time. During EAS
+ * cloud builds the project is uploaded WITHOUT `.env` (it is gitignored), so
+ * those values were `undefined` and every release APK crashed on launch with
+ * "supabaseUrl is required" - a crash at import time, inside the root layout
+ * render, which is why the app closed instantly with no visible error.
+ *
+ * Resolution order:
+ *   1. `app.json` -> `expo.extra.supabase`  (committed, always shipped)
+ *   2. `process.env.EXPO_PUBLIC_*`         (local dev / CI overrides)
+ *   3. a clear, actionable error instead of a silent `undefined`
+ */
+type SupabaseExtra = { url?: string; publishableKey?: string };
+
+const extra = (Constants.expoConfig?.extra ?? {}) as { supabase?: SupabaseExtra };
+const fromExtra = extra.supabase ?? {};
+
+const supabaseUrl =
+  fromExtra.url ?? process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+const supabaseKey =
+  fromExtra.publishableKey ?? process.env.EXPO_PUBLIC_SUPABASE_KEY ?? '';
+
+// NOTE: this is the PUBLIC anon/publishable key. It is designed to ship inside
+// the APK and is NOT a secret - Row Level Security in Postgres is what protects
+// the data. NEVER put the service_role key in app.json or anywhere in the app.
+
+if (!supabaseUrl || !supabaseKey) {
+  // Loud + specific, instead of createClient()'s opaque "supabaseUrl is required"
+  // which killed the app at startup with no diagnosable cause.
+  console.error(
+    '[supabase] Missing config. Checked app.json -> expo.extra.supabase and ' +
+      'EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_KEY. Both were empty.',
+  );
+  throw new Error(
+    'Supabase is not configured. Add expo.extra.supabase.url and ' +
+      'expo.extra.supabase.publishableKey to app.json.',
+  );
+}
+
+/** Base URL for calling Supabase Edge Functions. */
+export const supabaseFunctionsUrl = `${supabaseUrl}/functions/v1`;
 
 // ----------------------------------------------------------------------------
 // Secure session storage.
@@ -13,6 +55,17 @@ const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_KEY!;
 // expo-secure-store, backed by the hardware Keystore - NOT plain storage.
 // SecureStore has a ~2KB per-value limit, so larger values are chunked.
 // ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+// Web-only storage.
+// @react-native-async-storage/async-storage THROWS the instant it is imported
+// when the native module is missing from the running binary (e.g. inside Expo
+// Go) - and since every screen imports this file, that one throw took down the
+// whole app. It is never used on Android/iOS (the session lives in
+// expo-secure-store), so it is now loaded lazily, only in the web branches.
+// ----------------------------------------------------------------------------
+const webStorage = () =>
+  import('@react-native-async-storage/async-storage').then((m) => m.default);
 
 const CHUNK_SIZE = 1800;
 const CHUNK_COUNT_KEY = (key: string) => `${key}__chunks`;
@@ -29,7 +82,7 @@ async function clearChunks(key: string) {
 
 const secureStorage = {
   async getItem(key: string): Promise<string | null> {
-    if (Platform.OS === 'web') return AsyncStorage.getItem(key);
+    if (Platform.OS === 'web') return (await webStorage()).getItem(key);
 
     const countStr = await SecureStore.getItemAsync(CHUNK_COUNT_KEY(key));
     if (!countStr) {
@@ -49,7 +102,7 @@ const secureStorage = {
   },
 
   async setItem(key: string, value: string): Promise<void> {
-    if (Platform.OS === 'web') return AsyncStorage.setItem(key, value);
+    if (Platform.OS === 'web') return (await webStorage()).setItem(key, value);
 
     await clearChunks(key);
     await SecureStore.deleteItemAsync(key);
@@ -70,7 +123,7 @@ const secureStorage = {
   },
 
   async removeItem(key: string): Promise<void> {
-    if (Platform.OS === 'web') return AsyncStorage.removeItem(key);
+    if (Platform.OS === 'web') return (await webStorage()).removeItem(key);
     await clearChunks(key);
     await SecureStore.deleteItemAsync(key);
   },

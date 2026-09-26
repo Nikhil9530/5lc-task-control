@@ -1,17 +1,25 @@
 {
   "expo": {
-    "name": "5lc-task-control",
+    "name": "FLC Ops",
     "slug": "5lc-task-control",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "flctaskcontrol",
     "userInterfaceStyle": "light",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/f47c3760-095a-47c0-ba5d-1ba330da5120",
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD"
+    },
     "android": {
       "package": "flc.task_controler",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#061A3A",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -23,9 +31,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#FFFFFF",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 220
         }
       ],
       "@react-native-community/datetimepicker",
@@ -40,6 +48,10 @@
       "router": {},
       "eas": {
         "projectId": "f47c3760-095a-47c0-ba5d-1ba330da5120"
+      },
+      "supabase": {
+        "url": "https://hmyggerfpiizcwhdthvd.supabase.co",
+        "publishableKey": "sb_publishable_YqqnLyomtLkU9JyQE-X8qw_SlVLnHTX"
       }
     }
   }

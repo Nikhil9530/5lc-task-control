@@ -7,12 +7,14 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack } from '../../lib/navigation';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
+import { getSessionProfile } from '../../lib/auth';
+import { AppPress, Skeleton } from '../../lib/ui';
 
 type Profile = {
   id: string;
@@ -81,11 +83,11 @@ export default function ExtensionsScreen() {
 
   const loadRequests = useCallback(async () => {
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      // Shared session identity: cached local session read + ONE profiles row
+      // for the whole app, instead of an auth-server round-trip per screen.
+      const currentProfile = await getSessionProfile();
 
-      if (!user) {
+      if (!currentProfile) {
         setRequests([]);
         setLoading(false);
 
@@ -95,31 +97,6 @@ export default function ExtensionsScreen() {
         );
 
         router.replace('/');
-        return;
-      }
-
-      // Load current user's profile
-      const { data: currentProfile, error: profileError } =
-        await supabase
-          .from('profiles')
-          .select(
-            'id, employee_id, full_name, role, department, manager_id, director_id, is_active'
-          )
-          .eq('id', user.id)
-          .single();
-
-      if (profileError) {
-        console.error(
-          'Current profile error:',
-          profileError
-        );
-
-        Alert.alert(
-          'Error',
-          'Unable to load your profile.'
-        );
-
-        setRequests([]);
         return;
       }
 
@@ -720,13 +697,12 @@ export default function ExtensionsScreen() {
 
         {/* ACTION BUTTONS */}
         <View style={styles.buttonRow}>
-          <TouchableOpacity
+          <AppPress
             style={[
               styles.rejectButton,
               isProcessing &&
                 styles.disabledButton,
             ]}
-            activeOpacity={0.8}
             disabled={!!processingId}
             onPress={() =>
               rejectExtension(
@@ -754,15 +730,14 @@ export default function ExtensionsScreen() {
             >
               REJECT
             </Text>
-          </TouchableOpacity>
+          </AppPress>
 
-          <TouchableOpacity
+          <AppPress
             style={[
               styles.approveButton,
               isProcessing &&
                 styles.disabledButton,
             ]}
-            activeOpacity={0.8}
             disabled={!!processingId}
             onPress={() =>
               approveExtension(
@@ -790,7 +765,7 @@ export default function ExtensionsScreen() {
             >
               APPROVE
             </Text>
-          </TouchableOpacity>
+          </AppPress>
         </View>
       </View>
     );
@@ -801,11 +776,10 @@ export default function ExtensionsScreen() {
       <View style={styles.container}>
         {/* HEADER */}
         <View style={styles.header}>
-          <TouchableOpacity
+          <AppPress
             style={styles.backButton}
-            activeOpacity={0.8}
             onPress={() =>
-              router.back()
+              goBack()
             }
           >
             <Ionicons
@@ -813,7 +787,7 @@ export default function ExtensionsScreen() {
               size={22}
               color="#FFFFFF"
             />
-          </TouchableOpacity>
+          </AppPress>
 
           <View
             style={
@@ -866,22 +840,27 @@ export default function ExtensionsScreen() {
           }
         >
           {loading ? (
-            <View
-              style={styles.centerState}
-            >
-              <ActivityIndicator
-                size="large"
-                color="#E87516"
-              />
-
-              <Text
-                style={
-                  styles.centerStateText
-                }
-              >
-                Loading extension
-                requests...
-              </Text>
+            <View style={{ gap: 14 }}>
+              {[1, 2, 3].map((i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.emptyCard,
+                    { marginTop: 0, alignItems: 'flex-start' },
+                  ]}
+                >
+                  <Skeleton width={140} height={14} />
+                  <View style={{ height: 10 }} />
+                  <Skeleton width="85%" height={12} />
+                  <View style={{ height: 12 }} />
+                  <Skeleton width="60%" height={12} />
+                  <View style={{ height: 14 }} />
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <Skeleton width={90} height={30} radius={8} />
+                    <Skeleton width={90} height={30} radius={8} />
+                  </View>
+                </View>
+              ))}
             </View>
           ) : requests.length === 0 ? (
             <View
@@ -913,11 +892,10 @@ export default function ExtensionsScreen() {
                 your review.
               </Text>
 
-              <TouchableOpacity
+              <AppPress
                 style={
                   styles.refreshButton
                 }
-                activeOpacity={0.8}
                 onPress={
                   handleRefresh
                 }
@@ -935,7 +913,7 @@ export default function ExtensionsScreen() {
                 >
                   REFRESH
                 </Text>
-              </TouchableOpacity>
+              </AppPress>
             </View>
           ) : (
             <>

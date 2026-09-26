@@ -1,110 +1,167 @@
-import React, { useEffect, useState } from 'react';
-import { registerPushToken } from '../../lib/registerPushToken';
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Image,
   Platform,
+  Pressable,
   RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
-import {
-  router,
-  useFocusEffect,
-} from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { getMyId, getSessionProfile } from '../../lib/auth';
+import { nav, navReplace } from '../../lib/navigation';
+import { registerPushToken } from '../../lib/registerPushToken';
 import { supabase } from '../../lib/supabase';
+import { AppPress, Skeleton } from '../../lib/ui';
+
+type Counts = {
+  active: number;
+  due_today: number;
+  overdue: number;
+  completed_today: number;
+  not_started: number;
+  in_progress: number;
+  waiting: number;
+};
+
+// ----------------------------------------------------------------------------
+// Last-known KPI values, cached at module scope.
+//
+// WHY: this screen remounts every time you navigate back to it. Without a
+// cache the strip reset to zeros and the numbers visibly "popped in" once the
+// network answered - the laggy feel. Seeding state from the cache means the
+// strip paints with real numbers on the FIRST frame, then refreshes quietly.
+// ----------------------------------------------------------------------------
+let cachedCounts: Counts | null = null;
+let cachedUserName: string | null = null;
+let cachedUserRole: string | null = null;
+/** In-flight guard so focus + mount can never double-fire the queries. */
+let inFlight: Promise<void> | null = null;
 
 export default function DashboardScreen() {
-  const [activeTasks, setActiveTasks] = useState(0);
-  const [dueToday, setDueToday] = useState(0);
-  const [overdue, setOverdue] = useState(0);
-  const [completedToday, setCompletedToday] = useState(0);
+  // Seeded from cache -> correct on the first paint, no zero-flash.
+  const [counts, setCounts] = useState<Counts>(
+    cachedCounts ?? {
+      active: 0,
+      due_today: 0,
+      overdue: 0,
+      completed_today: 0,
+      not_started: 0,
+      in_progress: 0,
+      waiting: 0,
+    }
+  );
   const [refreshing, setRefreshing] = useState(false);
-  const [userName, setUserName] = useState('Super Admin');
-  const [userRole, setUserRole] = useState('');
-  const [notStarted, setNotStarted] = useState(0);
-  const [inProgress, setInProgress] = useState(0);
-  const [waiting, setWaiting] = useState(0);
-  const [hasUnreadNotifications, setHasUnreadNotifications] =
-  useState(false);
+  const [userName, setUserName] = useState(cachedUserName ?? 'Super Admin');
+  const [userRole, setUserRole] = useState(cachedUserRole ?? '');
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
+
+  // First network answer still pending AND nothing cached? Then (and only
+  // then) show skeleton rows that hold layout. On every return visit the
+  // seeded numbers paint instantly and these never appear.
+  const [bootstrapping, setBootstrapping] = useState(
+    cachedCounts === null
+  );
+
+  const pushRegistered = useRef(false);
+
+  useEffect(() => {
+    async function registerPush() {
+      if (pushRegistered.current) return;
+
+      const userId = await getMyId();
+      if (!userId) return;
+
+      pushRegistered.current = true;
+      await registerPushToken(userId);
+    }
+
+    registerPush();
+  }, []);
+
+  const loadDashboard = useCallback(async () => {
+    // Collapse concurrent calls (focus + mount racing) into one request.
+    if (inFlight) return inFlight;
+
+    inFlight = (async () => {
+      try {
+        // Shared session identity: ONE local secure-storage read + ONE
+        // profiles row for the whole session, promise-deduped across screens.
+        // Before this, dashboard -> tasks -> team each fired getUser() (auth
+        // server round-trip) + a profiles select in sequence - the laggy feel.
+        const today = new Date().toISOString().split('T')[0];
+
+        const [profile, unreadResult, countsResult] = await Promise.all([
+          getSessionProfile(),
+          (async () => {
+            const userId = await getMyId();
+
+            if (!userId) return { count: 0 };
+
+            const unread = await supabase
+              .from('notifications')
+              .select('id', { count: 'exact', head: true })
+              .eq('user_id', userId)
+              .eq('is_read', false);
+
+            return { count: unread.count ?? 0 };
+          })(),
+          // One round-trip for all seven counts instead of seven separate
+          // ones. RLS still applies inside the function (security invoker).
+          supabase.rpc('dashboard_counts', { p_today: today }),
+        ]);
+
+        setUserName(profile?.full_name ?? 'Super Admin');
+        setUserRole(profile?.role ?? '');
+        setHasUnreadNotifications((unreadResult.count ?? 0) > 0);
+
+        const next = countsResult.data as Counts | null;
+
+        if (next) {
+          cachedCounts = next;
+          setCounts(next);
+        }
+      } catch (e) {
+        // Never blank the screen on a transient failure - the cached numbers
+        // stay on screen and the pull-to-refresh still works.
+        console.log('Load dashboard error:', e);
+      } finally {
+        inFlight = null;
+        setBootstrapping(false);
+        setRefreshing(false);
+      }
+    })();
+
+    return inFlight;
+  }, []);
 
   useFocusEffect(
-  React.useCallback(() => {
-    loadDashboard();
-  }, [])
-);
-
-  async function loadDashboard() {
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (user) {
-        await registerPushToken(user.id);
-        
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('full_name, role')
-          .eq('id', user.id)
-          .single();
-
-        if (profile?.full_name) {
-          setUserName(profile.full_name);
-        }
-        setUserRole(profile?.role ?? '');
-
-        const { count: unreadCount } = await supabase
-    .from('notifications')
-    .select('*', {
-      count: 'exact',
-      head: true,
-    })
-    .eq('user_id', user.id)
-    .eq('is_read', false);
-
-  setHasUnreadNotifications(
-    (unreadCount ?? 0) > 0
+    useCallback(() => {
+      loadDashboard();
+    }, [loadDashboard])
   );
-      }
 
-      // RLS already scopes rows to what this user is allowed to see,
-      // so these counts are automatically role-aware (employee -> own,
-      // manager -> downline, director -> company-wide).
-      const today = new Date().toISOString().split('T')[0];
+  // Persist the header values for the next mount.
+  useEffect(() => {
+    cachedUserName = userName;
+  }, [userName]);
+  useEffect(() => {
+    cachedUserRole = userRole;
+  }, [userRole]);
 
-      const count = async (build: (q: any) => any) => {
-        const { count: c } = await build(
-          supabase.from('tasks').select('*', { count: 'exact', head: true })
-        );
-        return c ?? 0;
-      };
-
-      const [active, due, late, completed, ns, ip, wt] = await Promise.all([
-        count((q) => q.neq('status', 'completed')),
-        count((q) => q.eq('due_date', today).neq('status', 'completed')),
-        count((q) => q.lt('due_date', today).neq('status', 'completed')),
-        count((q) => q.eq('status', 'completed').gte('completed_at', `${today}T00:00:00`)),
-        count((q) => q.eq('status', 'not_started')),
-        count((q) => q.eq('status', 'in_progress')),
-        count((q) => q.eq('status', 'waiting')),
-      ]);
-
-      setActiveTasks(active);
-      setDueToday(due);
-      setOverdue(late);
-      setCompletedToday(completed);
-      setNotStarted(ns);
-      setInProgress(ip);
-      setWaiting(wt);
-    } finally {
-      setRefreshing(false);
-    }
-  }
+  const {
+    active: activeTasks,
+    due_today: dueToday,
+    overdue,
+    completed_today: completedToday,
+    not_started: notStarted,
+    in_progress: inProgress,
+    waiting,
+  } = counts;
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -135,6 +192,135 @@ export default function DashboardScreen() {
   const isDirector = ['director', 'super_admin'].includes(userRole);
   const scopeLabel = isDirector ? 'Company-wide' : 'Your team';
 
+const ActionCard = memo(function ActionCard({
+  icon,
+  title,
+  subtitle,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle: string;
+  onPress: () => void;
+}) {
+  return (
+    <AppPress style={styles.actionCard} onPress={onPress}>
+      <View style={styles.actionIcon}>
+        <Ionicons name={icon} size={23} color="#FFFFFF" />
+      </View>
+
+      <View style={styles.actionBody}>
+        <Text style={styles.actionTitle}>{title}</Text>
+
+        <Text style={styles.actionSubtitle}>{subtitle}</Text>
+      </View>
+
+      <Ionicons name="chevron-forward" size={18} color="#9AA2AC" />
+    </AppPress>
+  );
+});
+
+const BottomNavItem = memo(function BottomNavItem({
+  icon,
+  label,
+  active,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  active?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <AppPress style={styles.navItem} onPress={onPress}>
+      <Ionicons
+        name={icon}
+        size={22}
+        color={active ? '#E87516' : '#7B8490'}
+      />
+
+      <Text style={active ? styles.navActiveText : styles.navText}>
+        {label}
+      </Text>
+    </AppPress>
+  );
+});
+
+
+
+const KpiCard = memo(function KpiCard({
+  icon,
+  iconColor,
+  iconBg,
+  value,
+  label,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  iconColor: string;
+  iconBg: string;
+  value: number;
+  label: string;
+}) {
+  return (
+    <View style={styles.kpiCard}>
+      <View style={[styles.kpiIcon, { backgroundColor: iconBg }]}>
+        <Ionicons name={icon} size={23} color={iconColor} />
+      </View>
+
+      <Text style={styles.kpiNumber}>{value}</Text>
+
+      <Text style={styles.kpiLabel}>{label}</Text>
+    </View>
+  );
+});
+
+const KpiSkeletonGrid = memo(function KpiSkeletonGrid() {
+  return (
+    <View style={styles.kpiGrid}>
+      {[0, 1, 2, 3].map((key) => (
+        <View key={key} style={styles.kpiCard}>
+          <Skeleton width={42} height={42} radius={12} />
+          <View style={{ height: 10 }} />
+          <Skeleton width={52} height={26} />
+          <View style={{ height: 6 }} />
+          <Skeleton width="80%" height={12} />
+        </View>
+      ))}
+    </View>
+  );
+});
+
+const StatusRow = memo(function StatusRow({
+  dotColor,
+  name,
+  value,
+  last,
+}: {
+  dotColor: string;
+  name: string;
+  value: number;
+  last?: boolean;
+}) {
+  return (
+    <>
+      <View style={styles.statusRow}>
+        <View style={styles.statusLeft}>
+          <View
+            style={[styles.statusDot, { backgroundColor: dotColor }]}
+          />
+
+          <Text style={styles.statusName}>{name}</Text>
+        </View>
+
+        <Text style={styles.statusValue}>{value}</Text>
+      </View>
+
+      {!last && <View style={styles.statusDivider} />}
+    </>
+  );
+});
+
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
@@ -155,21 +341,20 @@ export default function DashboardScreen() {
               resizeMode="contain"
             />
 
-            <TouchableOpacity
-  style={styles.notificationButton}
-  activeOpacity={0.8}
-  onPress={() => router.push('/notifications')}
->
-  <Ionicons
-    name="notifications-outline"
-    size={24}
-    color="#FFFFFF"
-  />
+            <AppPress
+              style={styles.notificationButton}
+              onPress={() => nav('/notifications')}
+            >
+              <Ionicons
+                name="notifications-outline"
+                size={24}
+                color="#FFFFFF"
+              />
 
-  {hasUnreadNotifications && (
-  <View style={styles.notificationDot} />
-)}
-</TouchableOpacity>
+              {hasUnreadNotifications && (
+                <View style={styles.notificationDot} />
+              )}
+            </AppPress>
           </View>
 
           <View style={styles.greetingBlock}>
@@ -191,80 +376,44 @@ export default function DashboardScreen() {
           </View>
         </View>
 
-        {/* KPI CARDS */}
-        <View style={styles.kpiGrid}>
-          <View style={styles.kpiCard}>
-            <View style={styles.kpiIconBlue}>
-              <Ionicons
-                name="clipboard-outline"
-                size={23}
-                color="#17365D"
-              />
-            </View>
+        {/* KPI CARDS - skeleton on cold start only; cached numbers paint instantly */}
+        {bootstrapping ? (
+          <KpiSkeletonGrid />
+        ) : (
+          <View style={styles.kpiGrid}>
+            <KpiCard
+              icon="clipboard-outline"
+              iconColor="#17365D"
+              iconBg="#EAF1F9"
+              value={activeTasks}
+              label="Active Tasks"
+            />
 
-            <Text style={styles.kpiNumber}>
-              {activeTasks}
-            </Text>
+            <KpiCard
+              icon="calendar-outline"
+              iconColor="#E87516"
+              iconBg="#FFF0E5"
+              value={dueToday}
+              label="Due Today"
+            />
 
-            <Text style={styles.kpiLabel}>
-              Active Tasks
-            </Text>
+            <KpiCard
+              icon="warning-outline"
+              iconColor="#D64545"
+              iconBg="#FDEBEC"
+              value={overdue}
+              label="Overdue"
+            />
+
+            <KpiCard
+              icon="checkmark-circle-outline"
+              iconColor="#168653"
+              iconBg="#E8F6EF"
+              value={completedToday}
+              label="Completed Today"
+            />
           </View>
-
-          <View style={styles.kpiCard}>
-            <View style={styles.kpiIconOrange}>
-              <Ionicons
-                name="calendar-outline"
-                size={23}
-                color="#E87516"
-              />
-            </View>
-
-            <Text style={styles.kpiNumber}>
-              {dueToday}
-            </Text>
-
-            <Text style={styles.kpiLabel}>
-              Due Today
-            </Text>
-          </View>
-
-          <View style={styles.kpiCard}>
-            <View style={styles.kpiIconRed}>
-              <Ionicons
-                name="warning-outline"
-                size={23}
-                color="#D64545"
-              />
-            </View>
-
-            <Text style={styles.kpiNumber}>
-              {overdue}
-            </Text>
-
-            <Text style={styles.kpiLabel}>
-              Overdue
-            </Text>
-          </View>
-
-          <View style={styles.kpiCard}>
-            <View style={styles.kpiIconGreen}>
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={23}
-                color="#168653"
-              />
-            </View>
-
-            <Text style={styles.kpiNumber}>
-              {completedToday}
-            </Text>
-
-            <Text style={styles.kpiLabel}>
-              Completed Today
-            </Text>
-          </View>
-        </View>
+        )}
 
         {/* QUICK ACTIONS - role aware: managers control their own downline only */}
         <View style={styles.section}>
@@ -273,154 +422,71 @@ export default function DashboardScreen() {
           </Text>
 
           <View style={styles.actionGrid}>
-            <TouchableOpacity
-              style={styles.actionCard}
-              activeOpacity={0.8}
-              onPress={() => router.push('/create-task')}
-            >
-              <View style={styles.actionIcon}>
-                <Ionicons name="add" size={25} color="#FFFFFF" />
-              </View>
+            <ActionCard
+              icon="add"
+              title="Create Task"
+              subtitle={
+                isDirector
+                  ? 'Assign any work'
+                  : isManager
+                    ? 'Assign to your team or yourself'
+                    : 'Add a task for yourself'
+              }
+              onPress={() => nav('/create-task')}
+            />
 
-              <View>
-                <Text style={styles.actionTitle}>Create Task</Text>
-
-                <Text style={styles.actionSubtitle}>
-                  {isDirector
-                    ? 'Assign any work'
-                    : isManager
-                      ? 'Assign to your team or yourself'
-                      : 'Add a task for yourself'}
-                </Text>
-              </View>
-
-              <Ionicons name="chevron-forward" size={18} color="#9AA2AC" />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionCard}
-              activeOpacity={0.8}
-              onPress={() => router.push('/tasks')}
-            >
-              <View style={styles.actionIcon}>
-                <Ionicons name="list-outline" size={23} color="#FFFFFF" />
-              </View>
-
-              <View>
-                <Text style={styles.actionTitle}>My Tasks</Text>
-
-                <Text style={styles.actionSubtitle}>Work assigned to me</Text>
-              </View>
-
-              <Ionicons name="chevron-forward" size={18} color="#9AA2AC" />
-            </TouchableOpacity>
+            <ActionCard
+              icon="list-outline"
+              title="My Tasks"
+              subtitle="Work assigned to me"
+              onPress={() => nav('/tasks')}
+            />
 
             {isManager && (
-              <TouchableOpacity
-                style={styles.actionCard}
-                activeOpacity={0.8}
-                onPress={() => router.push('/team')}
-              >
-                <View style={styles.actionIcon}>
-                  <Ionicons name="people-outline" size={23} color="#FFFFFF" />
-                </View>
-
-                <View>
-                  <Text style={styles.actionTitle}>My Team</Text>
-
-                  <Text style={styles.actionSubtitle}>
-                    {isDirector ? 'Whole company' : 'Your downline'}
-                  </Text>
-                </View>
-
-                <Ionicons name="chevron-forward" size={18} color="#9AA2AC" />
-              </TouchableOpacity>
+              <ActionCard
+                icon="people-outline"
+                title="My Team"
+                subtitle={
+                  isDirector ? 'Whole company' : 'Your downline'
+                }
+                onPress={() => nav('/team')}
+              />
             )}
 
             {isManager && (
-              <TouchableOpacity
-                style={styles.actionCard}
-                activeOpacity={0.8}
-                onPress={() => router.push('/extensions')}
-              >
-                <View style={styles.actionIcon}>
-                  <Ionicons name="calendar-outline" size={23} color="#FFFFFF" />
-                </View>
-
-                <View>
-                  <Text style={styles.actionTitle}>Extensions</Text>
-
-                  <Text style={styles.actionSubtitle}>
-                    Requests from your team
-                  </Text>
-                </View>
-
-                <Ionicons name="chevron-forward" size={18} color="#9AA2AC" />
-              </TouchableOpacity>
+              <ActionCard
+                icon="calendar-outline"
+                title="Extensions"
+                subtitle="Requests from your team"
+                onPress={() => nav('/extensions')}
+              />
             )}
 
             {isManager && (
-              <TouchableOpacity
-                style={styles.actionCard}
-                activeOpacity={0.8}
-                onPress={() => router.push('/reports')}
-              >
-                <View style={styles.actionIcon}>
-                  <Ionicons name="bar-chart-outline" size={23} color="#FFFFFF" />
-                </View>
-
-                <View>
-                  <Text style={styles.actionTitle}>Reports</Text>
-
-                  <Text style={styles.actionSubtitle}>{scopeLabel} overview</Text>
-                </View>
-
-                <Ionicons name="chevron-forward" size={18} color="#9AA2AC" />
-              </TouchableOpacity>
+              <ActionCard
+                icon="bar-chart-outline"
+                title="Reports"
+                subtitle={`${scopeLabel} overview`}
+                onPress={() => nav('/reports')}
+              />
             )}
 
             {isManager && (
-              <TouchableOpacity
-                style={styles.actionCard}
-                activeOpacity={0.8}
-                onPress={() => router.push('/recurring')}
-              >
-                <View style={styles.actionIcon}>
-                  <Ionicons name="repeat-outline" size={23} color="#FFFFFF" />
-                </View>
-
-                <View>
-                  <Text style={styles.actionTitle}>Recurring Tasks</Text>
-
-                  <Text style={styles.actionSubtitle}>
-                    Automatic repeat work
-                  </Text>
-                </View>
-
-                <Ionicons name="chevron-forward" size={18} color="#9AA2AC" />
-              </TouchableOpacity>
+              <ActionCard
+                icon="repeat-outline"
+                title="Recurring Tasks"
+                subtitle="Automatic repeat work"
+                onPress={() => nav('/recurring')}
+              />
             )}
 
             {isDirector && (
-              <TouchableOpacity
-                style={styles.actionCard}
-                activeOpacity={0.8}
-                onPress={() => router.push('/manage-users')}
-              >
-                <View style={styles.actionIcon}>
-                  <Ionicons name="person-add-outline" size={23} color="#FFFFFF" />
-                </View>
-
-                <View>
-                  <Text style={styles.actionTitle}>Members & Hierarchy</Text>
-
-                  <Text style={styles.actionSubtitle}>
-                    Register people, set reporting
-                  </Text>
-                </View>
-
-                <Ionicons name="chevron-forward" size={18} color="#9AA2AC" />
-              </TouchableOpacity>
+              <ActionCard
+                icon="person-add-outline"
+                title="Members & Hierarchy"
+                subtitle="Register people, set reporting"
+                onPress={() => nav('/manage-users')}
+              />
             )}
           </View>
         </View>
@@ -432,77 +498,36 @@ export default function DashboardScreen() {
               Task Status
             </Text>
 
-            <TouchableOpacity
-              onPress={() => router.push('/tasks')}
-            >
-              <Text style={styles.viewAll}>
-                View All
-              </Text>
-            </TouchableOpacity>
+            <AppPress onPress={() => nav('/tasks')}>
+              <Text style={styles.viewAll}>View All</Text>
+            </AppPress>
           </View>
 
           <View style={styles.statusCard}>
-            <View style={styles.statusRow}>
-              <View style={styles.statusLeft}>
-                <View style={styles.statusDotNotStarted} />
+            <StatusRow
+              dotColor="#8D98A5"
+              name="Not Started"
+              value={notStarted}
+            />
 
-                <Text style={styles.statusName}>
-                  Not Started
-                </Text>
-              </View>
+            <StatusRow
+              dotColor="#E87516"
+              name="In Progress"
+              value={inProgress}
+            />
 
-              <Text style={styles.statusValue}>
-                {notStarted}
-              </Text>
-            </View>
+            <StatusRow
+              dotColor="#D9A227"
+              name="Waiting"
+              value={waiting}
+            />
 
-            <View style={styles.statusDivider} />
-
-            <View style={styles.statusRow}>
-              <View style={styles.statusLeft}>
-                <View style={styles.statusDotProgress} />
-
-                <Text style={styles.statusName}>
-                  In Progress
-                </Text>
-              </View>
-
-              <Text style={styles.statusValue}>
-                {inProgress}
-              </Text>
-            </View>
-
-            <View style={styles.statusDivider} />
-
-            <View style={styles.statusRow}>
-              <View style={styles.statusLeft}>
-                <View style={styles.statusDotWaiting} />
-
-                <Text style={styles.statusName}>
-                  Waiting
-                </Text>
-              </View>
-
-              <Text style={styles.statusValue}>
-                {waiting}
-              </Text>
-            </View>
-
-            <View style={styles.statusDivider} />
-
-            <View style={styles.statusRow}>
-              <View style={styles.statusLeft}>
-                <View style={styles.statusDotCompleted} />
-
-                <Text style={styles.statusName}>
-                  Completed
-                </Text>
-              </View>
-
-              <Text style={styles.statusValue}>
-                {completedToday}
-              </Text>
-            </View>
+            <StatusRow
+              dotColor="#168653"
+              name="Completed"
+              value={completedToday}
+              last
+            />
           </View>
         </View>
 
@@ -537,72 +562,41 @@ export default function DashboardScreen() {
           </Text>
 
           <Text style={styles.footerText}>
-            Simple â€¢ Focused â€¢ Accountable
+            Simple • Focused • Accountable
           </Text>
         </View>
       </ScrollView>
 
-      {/* BOTTOM NAV */}
+      {/* BOTTOM NAV - replace so the stack never holds duplicate tabs. Push
+          Tasks/Team/Settings twice and the old code stacked two copies; back
+          then revealed the same screen again (the "back goes twice" bug). */}
       <View style={styles.bottomNav}>
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.replace('/dashboard')}
-        >
-          <Ionicons
-            name="home"
-            size={22}
-            color="#E87516"
-          />
+        <BottomNavItem
+          icon="home"
+          label="Dashboard"
+          active
+          onPress={() => navReplace('/dashboard')}
+        />
 
-          <Text style={styles.navActiveText}>
-            Dashboard
-          </Text>
-        </TouchableOpacity>
+        <BottomNavItem
+          icon="clipboard-outline"
+          label="Tasks"
+          onPress={() => navReplace('/tasks')}
+        />
 
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push('/tasks')}
-        >
-          <Ionicons
-            name="clipboard-outline"
-            size={22}
-            color="#7B8490"
-          />
+        <BottomNavItem
+          icon={isManager ? 'people-outline' : 'notifications-outline'}
+          label={isManager ? 'Team' : 'Alerts'}
+          onPress={() =>
+            navReplace(isManager ? '/team' : '/notifications')
+          }
+        />
 
-          <Text style={styles.navText}>
-            Tasks
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push(isManager ? '/team' : '/notifications')}
-        >
-          <Ionicons
-            name={isManager ? 'people-outline' : 'notifications-outline'}
-            size={22}
-            color="#7B8490"
-          />
-
-          <Text style={styles.navText}>
-            {isManager ? 'Team' : 'Alerts'}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.push('/settings')}
-        >
-          <Ionicons
-            name="settings-outline"
-            size={22}
-            color="#7B8490"
-          />
-
-          <Text style={styles.navText}>
-            Settings
-          </Text>
-        </TouchableOpacity>
+        <BottomNavItem
+          icon="settings-outline"
+          label="Settings"
+          onPress={() => navReplace('/settings')}
+        />
       </View>
     </SafeAreaView>
   );
@@ -694,38 +688,10 @@ const styles = StyleSheet.create({
     minHeight: 132,
   },
 
-  kpiIconBlue: {
+  kpiIcon: {
     width: 42,
     height: 42,
     borderRadius: 12,
-    backgroundColor: '#EAF1F9',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  kpiIconOrange: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: '#FFF0E5',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  kpiIconRed: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: '#FDEBEC',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  kpiIconGreen: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: '#E8F6EF',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -792,6 +758,10 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
 
+  actionBody: {
+    flex: 1,
+  },
+
   actionTitle: {
     color: '#12233F',
     fontSize: 13,
@@ -824,35 +794,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  statusDotNotStarted: {
+  // One dot style instead of four near-identical ones - the colour comes from
+  // the StatusRow prop, so adding a status can never mean a missing style.
+  statusDot: {
     width: 9,
     height: 9,
     borderRadius: 5,
-    backgroundColor: '#8D98A5',
-    marginRight: 10,
-  },
-
-  statusDotProgress: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: '#E87516',
-    marginRight: 10,
-  },
-
-  statusDotWaiting: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: '#D9A227',
-    marginRight: 10,
-  },
-
-  statusDotCompleted: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: '#168653',
     marginRight: 10,
   },
 

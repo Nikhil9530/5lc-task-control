@@ -4,10 +4,11 @@ import {
   ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack } from '../../lib/navigation';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../../lib/supabase';
-import { getCurrentProfile } from '../../lib/auth';
+import { getSessionProfile } from '../../lib/auth';
 import { COLORS } from '../constants/app';
 
 type Recurring = {
@@ -39,7 +40,7 @@ export default function RecurringScreen() {
 
   const load = useCallback(async () => {
     try {
-      const me = await getCurrentProfile();
+      const me = await getSessionProfile();
       if (!me) {
         Alert.alert('Session Expired', 'Please log in again.');
         router.replace('/');
@@ -82,7 +83,7 @@ export default function RecurringScreen() {
     }
     setSaving(true);
     try {
-      const me = await getCurrentProfile();
+      const me = await getSessionProfile();
       const { error } = await supabase.from('recurring_tasks').insert({
         title: title.trim(),
         assigned_to: assignee,
@@ -125,7 +126,7 @@ export default function RecurringScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backButton} onPress={() => goBack()}>
           <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>

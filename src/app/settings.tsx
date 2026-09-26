@@ -4,9 +4,10 @@ import {
   StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack } from '../../lib/navigation';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import { getCurrentProfile, signOut } from '../../lib/auth';
+import { getSessionProfile, signOut } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { COLORS } from '../constants/app';
 
@@ -26,7 +27,7 @@ export default function SettingsScreen() {
   const [changing, setChanging] = useState(false);
 
   const load = useCallback(async () => {
-    const me = await getCurrentProfile();
+    const me = await getSessionProfile();
     if (!me) {
       Alert.alert('Session Expired', 'Please log in again.');
       router.replace('/');
@@ -82,7 +83,7 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backButton} onPress={() => goBack()}>
           <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
@@ -160,8 +161,8 @@ export default function SettingsScreen() {
             <Text style={styles.signOutText}>SIGN OUT</Text>
           </TouchableOpacity>
 
-          <Text style={styles.version}>5LC Task Control â€¢ v{version}</Text>
-          <Text style={styles.footer}>FIVE LASER CUT â€” Simple â€¢ Focused â€¢ Accountable</Text>
+          <Text style={styles.version}>5LC Task Control • v{version}</Text>
+          <Text style={styles.footer}>FIVE LASER CUT — Simple • Focused • Accountable</Text>
         </ScrollView>
       )}
     </SafeAreaView>
@@ -172,7 +173,7 @@ function Row({ label, value }: { label: string; value?: string }) {
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue} numberOfLines={1}>{value || 'â€”'}</Text>
+      <Text style={styles.rowValue} numberOfLines={1}>{value || '—'}</Text>
     </View>
   );
 }

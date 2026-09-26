@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
+import { goBack } from '../../lib/navigation';
+import { useState } from 'react';
 import {
   ActivityIndicator, Alert, Image, KeyboardAvoidingView, Platform,
   SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
-import { router } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { COLORS } from '../constants/app';
 
@@ -21,20 +22,20 @@ export default function ForgotPasswordScreen() {
     }
     setSending(true);
     try {
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('email')
-        .eq('employee_id', id)
-        .eq('is_active', true)
-        .single();
+      const { data: email, error: profileError } = await supabase.rpc(
+        'get_password_reset_email',
+        { p_employee_id: id }
+      );
 
-      if (profileError || !profile?.email) {
+      if (profileError || !email) {
         setSending(false);
         Alert.alert('Not found', 'Employee ID not found.');
         return;
       }
 
-      const { error } = await supabase.auth.resetPasswordForEmail(profile.email);
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: 'flctaskcontrol://reset',
+      });
       if (error) {
         setSending(false);
         Alert.alert('Unable to send reset email', error.message);
@@ -52,7 +53,7 @@ export default function ForgotPasswordScreen() {
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+          <TouchableOpacity style={styles.backButton} onPress={() => goBack()}>
             <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
           </TouchableOpacity>
           <View>

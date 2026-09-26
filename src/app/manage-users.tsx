@@ -4,9 +4,10 @@ import {
   ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack, nav } from '../../lib/navigation';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../../lib/supabase';
-import { getCurrentProfile } from '../../lib/auth';
+import { supabase, supabaseFunctionsUrl } from '../../lib/supabase';
+import { getSessionProfile } from '../../lib/auth';
 import { COLORS } from '../constants/app';
 
 type Member = {
@@ -29,7 +30,7 @@ async function callManageUser(body: Record<string, unknown>) {
   if (!token) throw new Error('Not logged in');
 
   const res = await fetch(
-    `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/manage-user`,
+    `${supabaseFunctionsUrl}/manage-user`,
     {
       method: 'POST',
       headers: {
@@ -68,7 +69,7 @@ export default function ManageUsersScreen() {
 
   const load = useCallback(async () => {
     try {
-      const me = await getCurrentProfile();
+      const me = await getSessionProfile();
       if (!me) {
         Alert.alert('Session Expired', 'Please log in again.');
         router.replace('/');
@@ -232,7 +233,7 @@ export default function ManageUsersScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backButton} onPress={() => goBack()}>
           <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
@@ -288,6 +289,19 @@ export default function ManageUsersScreen() {
                 </Text>
               </View>
               <View style={styles.actions}>
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  disabled={busyId === item.id}
+                  // See everything assigned to this person and how far it got.
+                  onPress={() =>
+                    nav({
+                      pathname: '/member-tasks',
+                      params: { id: item.id, name: item.full_name },
+                    })
+                  }
+                >
+                  <Ionicons name="clipboard-outline" size={17} color={COLORS.green} />
+                </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.actionBtn}
                   disabled={busyId === item.id}

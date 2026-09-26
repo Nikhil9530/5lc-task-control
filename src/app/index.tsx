@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import { nav } from '../../lib/navigation';
 import { useState } from 'react';
 import {
   Image,
@@ -117,7 +118,7 @@ export default function LoginScreen() {
             {/* Forgot password */}
             <TouchableOpacity
               style={styles.forgotButton}
-              onPress={() => router.push('/forgot-password')}
+              onPress={() => nav('/forgot-password')}
             >
               <Text style={styles.forgotText}>
                 Forgot Password?

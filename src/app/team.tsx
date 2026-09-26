@@ -1,12 +1,20 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { memo, useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Platform, RefreshControl, SafeAreaView,
-  ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  Alert,
+  FlatList,
+  Platform,
+  RefreshControl,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack, nav } from '../../lib/navigation';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
-import { getCurrentProfile } from '../../lib/auth';
+import { getSessionProfile } from '../../lib/auth';
+import { AppPress, EmptyState, Skeleton } from '../../lib/ui';
 import { COLORS } from '../constants/app';
 
 type Member = {
@@ -19,21 +27,70 @@ type Member = {
   open_tasks: number;
 };
 
+const MemberRow = memo(function MemberRow({ member }: { member: Member }) {
+  const handlePress = useCallback(() => {
+    nav({
+      pathname: '/member-tasks',
+      params: { id: member.id, name: member.full_name },
+    });
+  }, [member.id, member.full_name]);
+
+  return (
+    <AppPress
+      style={styles.card}
+      onPress={handlePress}
+    >
+      <View style={styles.avatar}>
+        <Text style={styles.avatarText}>
+          {(member.full_name || 'E').charAt(0).toUpperCase()}
+        </Text>
+      </View>
+      <View style={styles.info}>
+        <Text style={styles.name} numberOfLines={1}>{member.full_name}</Text>
+        <Text style={styles.meta}>
+          {member.employee_id}
+          {member.department ? `  •  ${member.department}` : ''}
+        </Text>
+      </View>
+      <View style={styles.badge}>
+        <Text style={styles.badgeNumber}>{member.open_tasks}</Text>
+        <Text style={styles.badgeLabel}>OPEN</Text>
+      </View>
+      <Ionicons
+        name="chevron-forward"
+        size={16}
+        color={COLORS.textFaint}
+      />
+    </AppPress>
+  );
+});
+
+function TeamSkeleton() {
+  return (
+    <View style={styles.card}>
+      <Skeleton width={44} height={44} radius={22} style={{ marginRight: 12 }} />
+      <View style={{ flex: 1, gap: 6 }}>
+        <Skeleton width="60%" height={14} />
+        <Skeleton width="40%" height={10} />
+      </View>
+      <Skeleton width={48} height={36} radius={10} />
+    </View>
+  );
+}
+
 export default function TeamScreen() {
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selfName, setSelfName] = useState('');
 
   const load = useCallback(async () => {
     try {
-      const me = await getCurrentProfile();
+      const me = await getSessionProfile();
       if (!me) {
         Alert.alert('Session Expired', 'Please log in again.');
         router.replace('/');
         return;
       }
-      setSelfName(me.full_name || 'Team');
 
       // Everyone visible to me: directors/admins see all; head/manager see downline.
       const { data: people, error } = await supabase
@@ -97,12 +154,19 @@ export default function TeamScreen() {
     load();
   }, [load]);
 
+  const renderItem = useCallback(
+    ({ item }: { item: Member }) => <MemberRow member={item} />,
+    []
+  );
+
+  const keyExtractor = useCallback((item: Member) => item.id, []);
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <AppPress style={styles.backButton} onPress={() => goBack()}>
           <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
-        </TouchableOpacity>
+        </AppPress>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>My Team</Text>
           <Text style={styles.headerSubtitle}>People you can see & manage</Text>
@@ -111,55 +175,45 @@ export default function TeamScreen() {
       </View>
 
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={COLORS.orange} />
-          <Text style={styles.loadingText}>Loading team...</Text>
+        <View style={styles.content}>
+          <TeamSkeleton />
+          <TeamSkeleton />
+          <TeamSkeleton />
+          <TeamSkeleton />
         </View>
       ) : (
-        <ScrollView
+        <FlatList
+          data={members}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.content}
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS !== 'web'}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.orange} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => {
+                setRefreshing(true);
+                load();
+              }}
+              tintColor={COLORS.orange}
+            />
           }
-        >
-          {members.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Ionicons name="people-outline" size={30} color={COLORS.textSoft} />
-              <Text style={styles.emptyTitle}>No team members</Text>
-              <Text style={styles.emptyText}>
-                There is no one in your downline yet.
-              </Text>
-            </View>
-          ) : (
-            members.map((m) => (
-              <View key={m.id} style={styles.card}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>
-                    {(m.full_name || 'E').charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-                <View style={styles.info}>
-                  <Text style={styles.name} numberOfLines={1}>{m.full_name}</Text>
-                  <Text style={styles.meta}>
-                    {m.employee_id}
-                    {m.department ? `  •  ${m.department}` : ''}
-                  </Text>
-                </View>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeNumber}>{m.open_tasks}</Text>
-                  <Text style={styles.badgeLabel}>OPEN</Text>
-                </View>
-              </View>
-            ))
-          )}
-        </ScrollView>
+          ListEmptyComponent={
+            <EmptyState
+              icon="people-outline"
+              title="No team members"
+              message="There is no one in your downline yet."
+            />
+          }
+        />
       )}
     </SafeAreaView>
   );
 }
-
-
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
@@ -180,8 +234,6 @@ const styles = StyleSheet.create({
   headerTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: '900' },
   headerSubtitle: { color: '#B9C2CF', fontSize: 12, marginTop: 3 },
   content: { padding: 16, paddingBottom: 40 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { color: COLORS.textSoft, marginTop: 10, fontSize: 13 },
   card: {
     backgroundColor: COLORS.card, borderRadius: 14, padding: 14,
     borderWidth: 1, borderColor: COLORS.border,
@@ -201,10 +253,4 @@ const styles = StyleSheet.create({
   },
   badgeNumber: { color: COLORS.orangeDark, fontSize: 16, fontWeight: '900' },
   badgeLabel: { color: COLORS.orangeDark, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 },
-  emptyCard: {
-    marginTop: 40, padding: 28, borderRadius: 16, backgroundColor: COLORS.card,
-    borderWidth: 1, borderColor: COLORS.border, alignItems: 'center',
-  },
-  emptyTitle: { marginTop: 14, color: COLORS.navy, fontSize: 16, fontWeight: '900' },
-  emptyText: { marginTop: 7, color: COLORS.textSoft, fontSize: 12, textAlign: 'center' },
 });

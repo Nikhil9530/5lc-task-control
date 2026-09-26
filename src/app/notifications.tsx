@@ -15,6 +15,13 @@ import {
   View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack, nav } from '../../lib/navigation';
+import {
+  acknowledgeNotifications,
+  clearReadNotifications,
+  dismissTrayEntriesForIds,
+  syncTrayWithInbox,
+} from '../../lib/notificationCenter';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 
@@ -102,14 +109,31 @@ export default function NotificationsScreen() {
   const [processingId, setProcessingId] =
     useState<string | null>(null);
 
+  // READ notifications were previously listed forever next to the unread ones,
+  // which is how a three-day-old notification was still "there". The inbox now
+  // opens on UNREAD (actionable) and ALL is an explicit opt-in.
+  const [filter, setFilter] =
+    useState<'unread' | 'all'>('unread');
+
+  // True unread total from the database, independent of the loaded page, so the
+  // badge is correct even when the ALL filter is showing 100 read rows.
+  const [unreadTotal, setUnreadTotal] =
+    useState(0);
+
+  const [bulkBusy, setBulkBusy] =
+    useState(false);
+
   const loadNotifications =
     useCallback(async () => {
       try {
+        // getSession() reads local secure storage. getUser() made a NETWORK
+        // round-trip to the auth server on every load, which was the main
+        // reason this screen felt slow to open.
         const {
-          data: { user },
-        } = await supabase.auth.getUser();
+          data: { session },
+        } = await supabase.auth.getSession();
 
-        if (!user) {
+        if (!session) {
           Alert.alert(
             'Session Expired',
             'Please log in again.'
@@ -119,15 +143,39 @@ export default function NotificationsScreen() {
           return;
         }
 
-        const { data, error } =
-          await supabase
-            .from(
-              'notifications_with_names'
-            )
-            .select('*')
-            .order('created_at', {
-              ascending: false,
-            });
+        // Base builder is reused by both branches; .eq() does not mutate it, so
+        // each branch gets its own independent chain.
+        const baseQuery = supabase
+          .from('notifications_with_names')
+          .select('*');
+
+        const listPromise = (
+          filter === 'unread'
+            ? baseQuery.eq('is_read', false)
+            : baseQuery
+        )
+          .order('created_at', {
+            ascending: false,
+          })
+          // Bounded page: an unbounded inbox was another way this screen got
+          // slow, and there is no reason to render months of history at once.
+          .limit(100);
+
+        // The list and the true unread count are independent, so fetch them
+        // together instead of one after the other.
+        const [listResult, unreadResult] =
+          await Promise.all([
+            listPromise,
+            supabase
+              .from('notifications')
+              .select('id', {
+                count: 'exact',
+                head: true,
+              })
+              .eq('is_read', false),
+          ]);
+
+        const { data, error } = listResult;
 
         if (error) {
           console.error(
@@ -146,6 +194,13 @@ export default function NotificationsScreen() {
         setNotifications(
           (data ?? []) as NotificationItem[]
         );
+
+        setUnreadTotal(unreadResult.count ?? 0);
+
+        // Anything the user has already read must not still be sitting in the
+        // Android tray. Reconciling here means simply opening this screen
+        // clears out stale tray entries and resets the badge.
+        await syncTrayWithInbox();
       } catch (error: any) {
         console.error(
           'Load notifications error:',
@@ -161,7 +216,7 @@ export default function NotificationsScreen() {
         setLoading(false);
         setRefreshing(false);
       }
-    }, []);
+    }, [filter]);
 
   useEffect(() => {
     loadNotifications();
@@ -172,6 +227,11 @@ export default function NotificationsScreen() {
     await loadNotifications();
   };
 
+  // Acknowledge a notification: flip is_read in ONE round-trip
+  // (mark_notifications_read is security-invoker, so it can only ever touch the
+  // caller's own rows), then remove its Android tray entry and reset the badge.
+  // The tray dismissal is the part that was missing before - which is exactly
+  // why a handled notification stayed visible for days.
   const markAsRead = async (
     notificationId: string
   ) => {
@@ -180,35 +240,12 @@ export default function NotificationsScreen() {
     try {
       setProcessingId(notificationId);
 
-      const { error } =
-        await supabase
-          .from('notifications')
-          .update({
-            is_read: true,
-          })
-          .eq('id', notificationId)
-          .eq(
-            'user_id',
-            (await supabase.auth.getUser())
-              .data.user?.id
-          );
+      await acknowledgeNotifications([
+        notificationId,
+      ]);
 
-      if (error) {
-        console.error(
-          'Mark notification read error:',
-          error
-        );
-
-        Alert.alert(
-          'Unable to update notification',
-          error.message
-        );
-
-        return;
-      }
-
-      setNotifications((current) =>
-        current.map((item) =>
+      setNotifications((current) => {
+        const updated = current.map((item) =>
           item.notification_id ===
           notificationId
             ? {
@@ -216,7 +253,28 @@ export default function NotificationsScreen() {
                 is_read: true,
               }
             : item
-        )
+        );
+
+        // On the UNREAD tab an acknowledged item no longer belongs here.
+        return filter === 'unread'
+          ? updated.filter(
+              (item) => !item.is_read
+            )
+          : updated;
+      });
+
+      setUnreadTotal((current) =>
+        Math.max(0, current - 1)
+      );
+    } catch (error: any) {
+      console.error(
+        'Mark notification read error:',
+        error
+      );
+
+      Alert.alert(
+        'Unable to update notification',
+        error?.message || 'Please try again.'
       );
     } finally {
       setProcessingId(null);
@@ -227,13 +285,22 @@ export default function NotificationsScreen() {
     item: NotificationItem
   ) => {
     if (!item.is_read) {
-      await markAsRead(
-        item.notification_id
-      );
+      await markAsRead(item.notification_id);
+    } else {
+      // Already read, so no row update is needed - but its tray entry must not
+      // be left behind either.
+      await dismissTrayEntriesForIds([
+        item.notification_id,
+      ]);
+    }
+
+    if (item.extension_id) {
+      nav('/extensions');
+      return;
     }
 
     if (item.task_id) {
-      router.push({
+      nav({
         pathname: '/task-detail',
         params: {
           id: item.task_id,
@@ -242,10 +309,57 @@ export default function NotificationsScreen() {
     }
   };
 
-  const unreadCount =
-    notifications.filter(
-      (item) => !item.is_read
-    ).length;
+  const changeFilter = (
+    next: 'unread' | 'all'
+  ) => {
+    if (next === filter) return;
+
+    setLoading(true);
+    setFilter(next);
+  };
+
+  const markAllRead = async () => {
+    if (bulkBusy) return;
+
+    try {
+      setBulkBusy(true);
+
+      // null = acknowledge everything, then clear the tray and the badge.
+      await acknowledgeNotifications(null);
+
+      setNotifications([]);
+      setUnreadTotal(0);
+    } catch (error: any) {
+      Alert.alert(
+        'Unable to mark all as read',
+        error?.message || 'Please try again.'
+      );
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const clearRead = async () => {
+    if (bulkBusy) return;
+
+    try {
+      setBulkBusy(true);
+
+      await clearReadNotifications();
+      await loadNotifications();
+    } catch (error: any) {
+      Alert.alert(
+        'Unable to clear notifications',
+        error?.message || 'Please try again.'
+      );
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  // The header badge shows the TRUE unread total, not merely what the current
+  // page happens to hold.
+  const unreadCount = unreadTotal;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -254,7 +368,7 @@ export default function NotificationsScreen() {
         <TouchableOpacity
           style={styles.backButton}
           activeOpacity={0.8}
-          onPress={() => router.back()}
+          onPress={() => goBack()}
         >
           <Ionicons
             name="arrow-back"
@@ -303,6 +417,88 @@ export default function NotificationsScreen() {
           />
         }
       >
+        {/* FILTER + BULK ACTIONS */}
+        <View style={styles.toolbar}>
+          <View style={styles.chipRow}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.chip,
+                filter === 'unread' &&
+                  styles.chipActive,
+              ]}
+              onPress={() =>
+                changeFilter('unread')
+              }
+            >
+              <Text
+                style={[
+                  styles.chipText,
+                  filter === 'unread' &&
+                    styles.chipTextActive,
+                ]}
+              >
+                UNREAD
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.chip,
+                filter === 'all' &&
+                  styles.chipActive,
+              ]}
+              onPress={() => changeFilter('all')}
+            >
+              <Text
+                style={[
+                  styles.chipText,
+                  filter === 'all' &&
+                    styles.chipTextActive,
+                ]}
+              >
+                ALL
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {!loading &&
+            (unreadTotal > 0 ||
+              filter === 'all') && (
+              <View style={styles.actionRow}>
+                {unreadTotal > 0 && (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={markAllRead}
+                    disabled={bulkBusy}
+                  >
+                    <Text
+                      style={styles.actionText}
+                    >
+                      MARK ALL READ
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {filter === 'all' && (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={clearRead}
+                    disabled={bulkBusy}
+                  >
+                    <Text
+                      style={styles.actionText}
+                    >
+                      CLEAR READ
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+        </View>
+
+
         {loading ? (
           <View style={styles.centerState}>
             <ActivityIndicator
@@ -329,13 +525,15 @@ export default function NotificationsScreen() {
             </View>
 
             <Text style={styles.emptyTitle}>
-              No Notifications
+              {filter === 'unread'
+                ? 'All Caught Up'
+                : 'No Notifications'}
             </Text>
 
             <Text style={styles.emptyText}>
-              You are all caught up. New task
-              and extension updates will appear
-              here.
+              {filter === 'unread'
+                ? 'Nothing needs your attention. Read notifications move out of this list.'
+                : 'Nothing here yet. Task and extension updates will appear here.'}
             </Text>
           </View>
         ) : (
@@ -628,6 +826,54 @@ const styles = StyleSheet.create({
   content: {
     padding: 16,
     paddingBottom: 35,
+  },
+
+  toolbar: {
+    marginBottom: 12,
+  },
+
+  chipRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+
+  chip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E6EA',
+  },
+
+  chipActive: {
+    backgroundColor: '#12233F',
+    borderColor: '#12233F',
+  },
+
+  chipText: {
+    color: '#7A8491',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+
+  chipTextActive: {
+    color: '#FFFFFF',
+  },
+
+  actionRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 18,
+  },
+
+  actionText: {
+    color: '#E87516',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
   },
 
   summaryCard: {

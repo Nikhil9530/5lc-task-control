@@ -76,3 +76,79 @@ export function formatStatusLabel(status: string): string {
 export function statusColor(status: string): string {
   return STATUS_COLORS[status as TaskStatus] ?? COLORS.grey;
 }
+
+// ----------------------------------------------------------------------------
+// Task workflow transitions - CLIENT MIRROR of migration 0020.
+//
+// The database is the authority: public.task_status_is_allowed() +
+// tg_tasks_guard_update() will REJECT an illegal update. These helpers only
+// keep the UI honest, so the app never offers a button that the server would
+// refuse. If you change the SQL, change this too.
+// ----------------------------------------------------------------------------
+
+/** Forward-only: can a task move from `from` to `to`? */
+export function isStatusTransitionAllowed(from: string, to: string): boolean {
+  if (from === to) return true;
+
+  switch (from) {
+    case 'not_started':
+      return ['in_progress', 'waiting', 'completed', 'rejected'].includes(to);
+    case 'in_progress':
+      return ['waiting', 'completed', 'rejected'].includes(to);
+    // Work has already started, so it can never go back to not_started.
+    case 'waiting':
+      return ['in_progress', 'completed', 'rejected'].includes(to);
+    // Reopening is a review decision, never a worker one.
+    case 'completed':
+      return to === 'in_progress';
+    case 'rejected':
+      return to === 'in_progress';
+    default:
+      return false;
+  }
+}
+
+/**
+ * Who the viewer is, relative to a task:
+ *   doer     - the task is assigned to them (they report progress)
+ *   reviewer - they assigned it, or they are above the assignee (approve/reject)
+ *   admin    - director or super admin (full override)
+ */
+export type TaskActor = 'doer' | 'reviewer' | 'admin';
+
+/** The statuses a given actor may actually set on a task currently in `from`. */
+export function allowedNextStatuses(from: string, actor: TaskActor): TaskStatus[] {
+  const candidates: TaskStatus[] = [
+    'not_started',
+    'in_progress',
+    'waiting',
+    'completed',
+    'rejected',
+  ];
+
+  return candidates.filter((to) => {
+    if (to === from) return false;
+    if (!isStatusTransitionAllowed(from, to)) return false;
+
+    if (actor === 'admin') return true;
+
+    if (actor === 'doer') {
+      // A completed task can only be reopened by a reviewer/admin.
+      if (from === 'completed') return false;
+      // Rejection is a review outcome, not something you do to yourself.
+      return (['in_progress', 'waiting', 'completed'] as TaskStatus[]).includes(to);
+    }
+
+    // reviewer: may send back for rework, or reject. Never report progress.
+    // A task that has not been picked up yet is off-limits - that was the
+    // "I can edit the guy's task" complaint.
+    if (from === 'not_started') return false;
+    return (['in_progress', 'rejected'] as TaskStatus[]).includes(to);
+  });
+}
+
+/** Human-readable label for a status value. */
+export function statusLabel(status: string): string {
+  return STATUS_LABELS[status as TaskStatus] ?? status.replace(/_/g, ' ');
+}
+

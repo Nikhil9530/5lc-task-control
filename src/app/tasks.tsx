@@ -1,17 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { goBack, nav } from '../../lib/navigation';
+import { getMyId } from '../../lib/auth';
+import { memo, useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   RefreshControl,
   SafeAreaView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
+import { AppPress, EmptyState, SkeletonCard } from '../../lib/ui';
 
 type Task = {
   id: string;
@@ -28,22 +28,103 @@ type Task = {
   parent_task_id: string | null;
 };
 
+// Precompute once per render, not inside every row.
+const TODAY = new Date().toISOString().split('T')[0];
+
+function isOverdue(task: Task) {
+  if (!task.due_date || task.status === 'completed') {
+    return false;
+  }
+
+  return task.due_date < TODAY;
+}
+
+function formatStatus(status: Task['status']) {
+  return status.replace('_', ' ').toUpperCase();
+}
+
+function formatPriority(priority: Task['priority']) {
+  return priority.toUpperCase();
+}
+
+// Memoized so a refresh that returns the same list does not re-render every
+// row. Before this, renderTask was a new closure per render, which defeated
+// memoization and made long lists scroll sluggishly.
+const TaskRow = memo(function TaskRow({ item }: { item: Task }) {
+  const overdue = isOverdue(item);
+
+  return (
+    <AppPress
+      style={styles.taskCard}
+      onPress={() =>
+        nav({
+          pathname: '/task-detail',
+          params: { id: item.id },
+        })
+      }
+    >
+      <View style={styles.taskTop}>
+        <Text style={styles.taskTitle}>{item.title}</Text>
+
+        <View style={styles.priorityBadge}>
+          <Text style={styles.priorityText}>
+            {formatPriority(item.priority)}
+          </Text>
+        </View>
+      </View>
+
+      {item.description ? (
+        <Text style={styles.description} numberOfLines={2}>
+          {item.description}
+        </Text>
+      ) : null}
+
+      <View style={styles.taskBottom}>
+        <View>
+          <Text style={styles.label}>STATUS</Text>
+
+          <Text style={styles.status}>
+            {formatStatus(item.status)}
+          </Text>
+        </View>
+
+        <View style={styles.dueContainer}>
+          <Text style={styles.label}>DUE DATE</Text>
+
+          <Text
+            style={[styles.dueDate, overdue && styles.overdue]}
+          >
+            {item.due_date || 'No deadline'}
+          </Text>
+        </View>
+      </View>
+
+      {overdue && (
+        <View style={styles.overdueBox}>
+          <Text style={styles.overdueText}>OVERDUE</Text>
+        </View>
+      )}
+
+      <View style={styles.viewTaskRow}>
+        <Text style={styles.viewTaskText}>VIEW TASK</Text>
+
+        <Text style={styles.arrow}>›</Text>
+      </View>
+    </AppPress>
+  );
+});
+
 export default function TasksScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadTasks();
-  }, []);
-
-  async function loadTasks() {
+  const loadTasks = useCallback(async () => {
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      // Cached local session read, not an auth-server round-trip.
+      const userId = await getMyId();
 
-      if (!user) {
+      if (!userId) {
         setTasks([]);
         return;
       }
@@ -53,7 +134,7 @@ export default function TasksScreen() {
         .select(
           'id, title, description, priority, status, due_date, parent_task_id'
         )
-        .eq('assigned_to', user.id)
+        .eq('assigned_to', userId)
         .order('due_date', {
           ascending: true,
           nullsFirst: false,
@@ -69,144 +150,50 @@ export default function TasksScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }
+  }, []);
 
-  async function refreshTasks() {
+  useEffect(() => {
+    loadTasks();
+  }, [loadTasks]);
+
+  const refreshTasks = useCallback(async () => {
     setRefreshing(true);
     await loadTasks();
-  }
+  }, [loadTasks]);
 
-  function isOverdue(task: Task) {
-    if (!task.due_date || task.status === 'completed') {
-      return false;
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-
-    return task.due_date < today;
-  }
-
-  function formatStatus(status: Task['status']) {
-    return status.replace('_', ' ').toUpperCase();
-  }
-
-  function formatPriority(priority: Task['priority']) {
-    return priority.toUpperCase();
-  }
-
-  function renderTask({ item }: { item: Task }) {
-    const overdue = isOverdue(item);
-
-    return (
-      <TouchableOpacity
-        style={styles.taskCard}
-        activeOpacity={0.8}
-        onPress={() =>
-          router.push({
-            pathname: '/task-detail',
-            params: { id: item.id },
-          })
-        }
-      >
-        <View style={styles.taskTop}>
-          <Text style={styles.taskTitle}>
-            {item.title}
-          </Text>
-
-          <View style={styles.priorityBadge}>
-            <Text style={styles.priorityText}>
-              {formatPriority(item.priority)}
-            </Text>
-          </View>
-        </View>
-
-        {item.description ? (
-          <Text
-            style={styles.description}
-            numberOfLines={2}
-          >
-            {item.description}
-          </Text>
-        ) : null}
-
-        <View style={styles.taskBottom}>
-          <View>
-            <Text style={styles.label}>STATUS</Text>
-
-            <Text style={styles.status}>
-              {formatStatus(item.status)}
-            </Text>
-          </View>
-
-          <View style={styles.dueContainer}>
-            <Text style={styles.label}>DUE DATE</Text>
-
-            <Text
-              style={[
-                styles.dueDate,
-                overdue && styles.overdue,
-              ]}
-            >
-              {item.due_date || 'No deadline'}
-            </Text>
-          </View>
-        </View>
-
-        {overdue && (
-          <View style={styles.overdueBox}>
-            <Text style={styles.overdueText}>
-              OVERDUE
-            </Text>
-          </View>
-        )}
-
-        <View style={styles.viewTaskRow}>
-          <Text style={styles.viewTaskText}>
-            VIEW TASK
-          </Text>
-
-          <Text style={styles.arrow}>
-            ›
-          </Text>
-        </View>
-      </TouchableOpacity>
-    );
-  }
+  const renderTask = useCallback(
+    ({ item }: { item: Task }) => <TaskRow item={item} />,
+    []
+  );
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-  <View style={styles.headerRow}>
-    <TouchableOpacity
-      style={styles.backButton}
-      activeOpacity={0.8}
-      onPress={() => router.back()}
-    >
-      <Ionicons
-        name="arrow-back"
-        size={22}
-        color="#FFFFFF"
-      />
-    </TouchableOpacity>
+        <View style={styles.headerRow}>
+          <AppPress style={styles.backButton} onPress={() => goBack()}>
+            <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
+          </AppPress>
 
-    <View style={styles.headerText}>
-      <Text style={styles.title}>Tasks</Text>
+          <View style={styles.headerText}>
+            <Text style={styles.title}>Tasks</Text>
 
-      <Text style={styles.subtitle}>
-        Company Task Management
-      </Text>
-    </View>
-  </View>
-</View>
+            <Text style={styles.subtitle}>
+              Company Task Management
+            </Text>
+          </View>
+        </View>
+      </View>
 
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" />
-
-          <Text style={styles.loadingText}>
-            Loading tasks...
-          </Text>
-        </View>
+        // Skeleton holds the layout instead of a spinner, so the list fades
+        // in where the placeholders were instead of popping in from nothing.
+        <FlatList
+          data={[0, 1, 2, 3, 4]}
+          keyExtractor={(item) => `skeleton-${item}`}
+          renderItem={() => <SkeletonCard />}
+          contentContainerStyle={styles.listContainer}
+          scrollEnabled={false}
+        />
       ) : (
         <FlatList
           data={tasks}
@@ -223,16 +210,16 @@ export default function TasksScreen() {
               onRefresh={refreshTasks}
             />
           }
+          removeClippedSubviews
+          maxToRenderPerBatch={10}
+          windowSize={7}
+          initialNumToRender={8}
           ListEmptyComponent={
-            <View style={styles.emptyBox}>
-              <Text style={styles.emptyTitle}>
-                No Tasks
-              </Text>
-
-              <Text style={styles.emptyText}>
-                You don't have any assigned tasks yet.
-              </Text>
-            </View>
+            <EmptyState
+              icon="clipboard-outline"
+              title="No Tasks"
+              message="You don't have any assigned tasks yet."
+            />
           }
         />
       )}
@@ -401,38 +388,9 @@ subtitle: {
     lineHeight: 18,
   },
 
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  loadingText: {
-    color: '#7A8491',
-    marginTop: 10,
-    fontSize: 13,
-  },
-
   emptyContainer: {
     flexGrow: 1,
     justifyContent: 'center',
     padding: 20,
-  },
-
-  emptyBox: {
-    alignItems: 'center',
-  },
-
-  emptyTitle: {
-    color: '#12233F',
-    fontSize: 20,
-    fontWeight: '800',
-  },
-
-  emptyText: {
-    color: '#7A8491',
-    fontSize: 13,
-    marginTop: 6,
-    textAlign: 'center',
   },
 });

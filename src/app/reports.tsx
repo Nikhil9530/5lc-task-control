@@ -1,15 +1,77 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { memo, useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Alert, Platform, RefreshControl, SafeAreaView,
-  ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  Alert, Platform, RefreshControl, SafeAreaView,
+  ScrollView, StyleSheet, Text, View,
 } from 'react-native';
 import { router } from 'expo-router';
+import { goBack, nav } from '../../lib/navigation';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
-import { getCurrentProfile } from '../../lib/auth';
+import { getSessionProfile } from '../../lib/auth';
+import { AppPress, Skeleton } from '../../lib/ui';
 import { COLORS, STATUS_LABELS, STATUS_COLORS, formatStatusLabel } from '../constants/app';
 
 type Stat = { label: string; value: number; color: string };
+
+type OverdueItem = {
+  id: string;
+  title: string;
+  due_date: string;
+  priority: string;
+  status: string;
+};
+
+const OverdueRow = memo(function OverdueRow({ item }: { item: OverdueItem }) {
+  const handlePress = useCallback(() => {
+    nav({ pathname: '/task-detail', params: { id: item.id } });
+  }, [item.id]);
+
+  return (
+    <AppPress
+      style={styles.overdueRow}
+      onPress={handlePress}
+    >
+      <View style={{ flex: 1 }}>
+        <Text style={styles.overdueTitle} numberOfLines={1}>{item.title}</Text>
+        <Text style={styles.overdueMeta}>
+          Due {item.due_date}  -  {formatStatusLabel(item.status)}
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={COLORS.textFaint} />
+    </AppPress>
+  );
+});
+
+function ReportsSkeleton() {
+  return (
+    <View style={{ gap: 14 }}>
+      <View style={styles.summaryRow}>
+        <View style={styles.summaryCard}>
+          <Skeleton width={80} height={12} />
+          <View style={{ height: 10 }} />
+          <Skeleton width={50} height={28} />
+        </View>
+        <View style={styles.summaryCard}>
+          <Skeleton width={80} height={12} />
+          <View style={{ height: 10 }} />
+          <Skeleton width={50} height={28} />
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Skeleton width={130} height={18} style={{ marginBottom: 14 }} />
+        {[1, 2, 3, 4, 5].map((i) => (
+          <View key={i} style={styles.statRow}>
+            <Skeleton width={10} height={10} radius={5} style={{ marginRight: 10 }} />
+            <Skeleton width="50%" height={14} />
+            <View style={{ flex: 1 }} />
+            <Skeleton width={24} height={14} />
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
 
 export default function ReportsScreen() {
   const [loading, setLoading] = useState(true);
@@ -17,11 +79,11 @@ export default function ReportsScreen() {
   const [stats, setStats] = useState<Stat[]>([]);
   const [total, setTotal] = useState(0);
   const [completedAll, setCompletedAll] = useState(0);
-  const [overdueList, setOverdueList] = useState<any[]>([]);
+  const [overdueList, setOverdueList] = useState<OverdueItem[]>([]);
 
   const load = useCallback(async () => {
     try {
-      const me = await getCurrentProfile();
+      const me = await getSessionProfile();
       if (!me) {
         Alert.alert('Session Expired', 'Please log in again.');
         router.replace('/');
@@ -66,9 +128,9 @@ export default function ReportsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <AppPress style={styles.backButton} onPress={() => goBack()}>
           <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
-        </TouchableOpacity>
+        </AppPress>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Reports</Text>
           <Text style={styles.headerSubtitle}>Performance overview</Text>
@@ -76,65 +138,53 @@ export default function ReportsScreen() {
         <Ionicons name="bar-chart-outline" size={22} color={COLORS.orange} />
       </View>
 
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={COLORS.orange} />
-        </View>
-      ) : (
-        <ScrollView
-          contentContainerStyle={styles.content}
-          showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.orange} />}
-        >
-          <View style={styles.summaryRow}>
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>TOTAL TASKS</Text>
-              <Text style={styles.summaryValue}>{total}</Text>
-            </View>
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>COMPLETION</Text>
-              <Text style={[styles.summaryValue, { color: COLORS.green }]}>{completionRate}%</Text>
-            </View>
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Status Breakdown</Text>
-            {stats.map((s) => (
-              <View key={s.label} style={styles.statRow}>
-                <View style={[styles.dot, { backgroundColor: s.color }]} />
-                <Text style={styles.statLabel}>{s.label}</Text>
-                <Text style={styles.statValue}>{s.value}</Text>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.orange} />}
+      >
+        {loading ? (
+          <ReportsSkeleton />
+        ) : (
+          <>
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryLabel}>TOTAL TASKS</Text>
+                <Text style={styles.summaryValue}>{total}</Text>
               </View>
-            ))}
-          </View>
-
-          <View style={styles.card}>
-            <View style={styles.cardHeaderRow}>
-              <Text style={styles.cardTitle}>Most Overdue</Text>
-              <Ionicons name="warning-outline" size={20} color={COLORS.red} />
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryLabel}>COMPLETION</Text>
+                <Text style={[styles.summaryValue, { color: COLORS.green }]}>{completionRate}%</Text>
+              </View>
             </View>
-            {overdueList.length === 0 ? (
-              <Text style={styles.emptyText}>No overdue tasks. Great work.</Text>
-            ) : (
-              overdueList.map((t) => (
-                <TouchableOpacity
-                  key={t.id}
-                  style={styles.overdueRow}
-                  onPress={() => router.push({ pathname: '/task-detail', params: { id: t.id } })}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.overdueTitle} numberOfLines={1}>{t.title}</Text>
-                    <Text style={styles.overdueMeta}>
-                      Due {t.due_date}  -  {formatStatusLabel(t.status)}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={COLORS.textFaint} />
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-        </ScrollView>
-      )}
+
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Status Breakdown</Text>
+              {stats.map((s) => (
+                <View key={s.label} style={styles.statRow}>
+                  <View style={[styles.dot, { backgroundColor: s.color }]} />
+                  <Text style={styles.statLabel}>{s.label}</Text>
+                  <Text style={styles.statValue}>{s.value}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.cardHeaderRow}>
+                <Text style={styles.cardTitle}>Most Overdue</Text>
+                <Ionicons name="warning-outline" size={20} color={COLORS.red} />
+              </View>
+              {overdueList.length === 0 ? (
+                <Text style={styles.emptyText}>No overdue tasks. Great work.</Text>
+              ) : (
+                overdueList.map((t) => (
+                  <OverdueRow key={t.id} item={t} />
+                ))
+              )}
+            </View>
+          </>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }

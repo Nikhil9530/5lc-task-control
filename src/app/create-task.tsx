@@ -7,13 +7,15 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
+import { goBack } from '../../lib/navigation';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../../lib/supabase';
+import { getMyId, getSessionProfile } from '../../lib/auth';
+import { AppPress } from '../../lib/ui';
 
 export default function CreateTaskScreen() {
   // When opened from a task as "delegate", this is the parent task id.
@@ -39,30 +41,11 @@ export default function CreateTaskScreen() {
   setLoadingAssignees(true);
 
   try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    // Shared session profile: local session read + ONE cached profiles row
+    // for the whole app, instead of an auth-server round-trip per screen.
+    const profile = await getSessionProfile();
 
-    if (!user) {
-      setLoadingAssignees(false);
-      return;
-    }
-
-    // Get logged-in user's profile
-    const { data: profile, error: profileError } =
-      await supabase
-        .from('profiles')
-        .select(
-          'id, employee_id, full_name, role, department, manager_id, director_id'
-        )
-        .eq('id', user.id)
-        .single();
-
-    if (profileError || !profile) {
-      console.log(
-        'Profile load error:',
-        profileError?.message
-      );
+    if (!profile) {
       setLoadingAssignees(false);
       return;
     }
@@ -76,7 +59,7 @@ export default function CreateTaskScreen() {
         'id, employee_id, full_name, role, department, manager_id, director_id'
       )
       .eq('is_active', true)
-      .neq('id', user.id)
+      .neq('id', profile.id)
       .order('full_name', { ascending: true });
 
     if (error) {
@@ -177,11 +160,10 @@ export default function CreateTaskScreen() {
     setSaving(true);
 
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      // Cached local session read, not an auth-server round-trip.
+      const userId = await getMyId();
 
-      if (!user) {
+      if (!userId) {
         setSaving(false);
         Alert.alert('Session expired', 'Please log in again.');
         router.replace('/');
@@ -194,8 +176,8 @@ export default function CreateTaskScreen() {
         .insert({
           title: title.trim(),
           description: description.trim() || null,
-          created_by: user.id,
-          assigned_by: user.id,
+          created_by: userId,
+          assigned_by: userId,
           assigned_to: selectedAssignee,
           priority,
           status: 'not_started',
@@ -246,16 +228,16 @@ export default function CreateTaskScreen() {
       >
         {/* HEADER */}
         <View style={styles.header}>
-          <TouchableOpacity
+          <AppPress
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() => goBack()}
           >
             <Ionicons
               name="arrow-back"
               size={22}
               color="#FFFFFF"
             />
-          </TouchableOpacity>
+          </AppPress>
 
           <View>
             <Text style={styles.headerTitle}>
@@ -310,7 +292,7 @@ export default function CreateTaskScreen() {
 
         <View style={styles.priorityRow}>
           {['low', 'normal', 'high', 'urgent'].map((item) => (
-            <TouchableOpacity
+            <AppPress
               key={item}
               style={[
                 styles.priorityButton,
@@ -326,16 +308,15 @@ export default function CreateTaskScreen() {
               >
                 {item.toUpperCase()}
               </Text>
-            </TouchableOpacity>
+            </AppPress>
           ))}
         </View>
 
                 {/* ASSIGN TO */}
         <Text style={styles.label}>ASSIGN TO</Text>
 
-        <TouchableOpacity
+        <AppPress
           style={styles.inputWithIcon}
-          activeOpacity={0.8}
           onPress={() =>
             setShowAssigneeList(!showAssigneeList)
           }
@@ -373,7 +354,7 @@ export default function CreateTaskScreen() {
             size={18}
             color="#7C8795"
           />
-        </TouchableOpacity>
+        </AppPress>
 
         {showAssigneeList && (
           <View style={styles.assigneeList}>
@@ -387,10 +368,9 @@ export default function CreateTaskScreen() {
               </Text>
             ) : (
               assignees.map((person) => (
-                <TouchableOpacity
+                <AppPress
                   key={person.id}
                   style={styles.assigneeItem}
-                  activeOpacity={0.8}
                   onPress={() => {
                     setSelectedAssignee(person.id);
                     setShowAssigneeList(false);
@@ -424,7 +404,7 @@ export default function CreateTaskScreen() {
                       color="#E87516"
                     />
                   )}
-                </TouchableOpacity>
+                </AppPress>
               ))
             )}
           </View>
@@ -464,9 +444,8 @@ export default function CreateTaskScreen() {
   </View>
 ) : (
   <>
-    <TouchableOpacity
+    <AppPress
       style={styles.inputWithIcon}
-      activeOpacity={0.8}
       onPress={() => setShowDueDatePicker(true)}
     >
       <Ionicons
@@ -493,7 +472,7 @@ export default function CreateTaskScreen() {
         size={18}
         color="#7C8795"
       />
-    </TouchableOpacity>
+    </AppPress>
 
     {showDueDatePicker && (
       <DateTimePicker
@@ -550,7 +529,7 @@ export default function CreateTaskScreen() {
         </View>
 
         {/* CREATE BUTTON */}
-        <TouchableOpacity
+        <AppPress
           style={[
             styles.createButton,
             saving && styles.disabledButton,
@@ -569,7 +548,7 @@ export default function CreateTaskScreen() {
               color="#FFFFFF"
             />
           )}
-        </TouchableOpacity>
+        </AppPress>
       </ScrollView>
     </SafeAreaView>
   );

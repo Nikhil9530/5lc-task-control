@@ -46,6 +46,8 @@ Full details + rationale: `SECURITY.md` §4.
    - `0014_notify_upline_extension.sql` (upline notified on extension request)
    - `0015_my_downline.sql`         (server-side downline scoping)
    - `0016_self_task_creation.sql`  (everyone can create tasks for themselves)
+   - `0017_delegation_role_gate.sql` (only manager and above may delegate)
+   - `0018_auth_lookup_rpcs.sql`    (Employee ID -> email for Sign In + Forgot Password)
 4. **Test security:** log in as a manager, try to assign a task to someone
    OUTSIDE their downline → must be denied. Log in as an employee, try to
    create a task → must be denied.
