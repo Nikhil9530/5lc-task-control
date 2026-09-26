@@ -1,4 +1,5 @@
 import { router } from 'expo-router';
+import { clearDashboardCache } from './dashboardCache';
 import { supabase } from './supabase';
 
 // ----------------------------------------------------------------------------
@@ -148,4 +149,10 @@ export function clearSessionCache() {
   cachedSessionProfile = null;
   cachedSessionProfileFor = null;
   sessionProfilePromise = null;
+
+  // The dashboard cache holds counts AND the previous user's name/role. It is
+  // persisted to disk for fast cold starts, so it MUST be dropped on sign-out
+  // or the next person to sign in would briefly see the previous user's
+  // greeting and KPI numbers.
+  clearDashboardCache();
 }

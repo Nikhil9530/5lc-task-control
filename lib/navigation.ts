@@ -62,6 +62,32 @@ export function navReplace(href: Href): void {
 }
 
 /**
+ * Auth-redirect de-duplication.
+ *
+ * WHY: after a successful sign-in, `signInWithPassword` fires supabase's
+ * SIGNED_IN event AND the login screen navigates itself. Both the root-layout
+ * auth gate and the login screen therefore wanted to call
+ * router.replace('/dashboard') inside the same tick, so the transition ran
+ * twice - a visible double "pop" right after signing in.
+ *
+ * The first caller claims the "<destination>|<origin>" key and navigates; the
+ * second sees the claim already taken and stands down. Because the origin is
+ * part of the key, a genuine later state change (signing out from the
+ * dashboard, for example) still navigates normally.
+ */
+let lastAuthRedirect: string | null = null;
+
+/** Returns true if this caller won the right to perform the redirect. */
+export function claimAuthRedirect(target: Href, from: string): boolean {
+  const key = `${destinationKey(target)}|${from}`;
+
+  if (lastAuthRedirect === key) return false;
+
+  lastAuthRedirect = key;
+  return true;
+}
+
+/**
  * Go back one screen, ignoring an accidental repeat tap.
  *
  * This is locked globally (not per-destination) because "back" has no

@@ -1,15 +1,53 @@
 import * as Linking from 'expo-linking';
 import * as Notifications from 'expo-notifications';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import React from 'react';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  hydrateDashboardCache,
+  waitForFirstDashboardPaint,
+} from '../../lib/dashboardCache';
+import { claimAuthRedirect } from '../../lib/navigation';
 import { supabase } from '../../lib/supabase';
 import { useNotificationRouter } from '../../lib/useNotificationRouter';
 
 // Routes anyone may open without being signed in.
 // (undefined = index/login screen)
 const PUBLIC_ROUTES = ['forgot-password'];
+
+// How long we are willing to hold the splash waiting for the dashboard's first
+// real paint, and the absolute failsafe if session restore itself stalls.
+const FIRST_PAINT_BUDGET_MS = 1200;
+const SPLASH_FAILSAFE_MS = 3500;
+
+// ----------------------------------------------------------------------------
+// COLD START
+//
+// The old flow mounted <Stack /> immediately, which rendered the index/login
+// route while the session was still unknown. getSession() then resolved, guard()
+// saw "session && segments[0] === undefined" and called router.replace(),
+// so every cold start showed: LOGIN FLASH -> BLANK -> DASHBOARD -> DASHBOARD
+// repainting when the network answered.
+//
+// The fix is NOT to render null (that unmounts the navigator, so router.replace
+// has no navigation ref to act on - it silently no-ops - and it just swaps the
+// login flash for a blank screen). Instead we keep the navigator MOUNTED so
+// routing works, and hold the NATIVE splash on top of it until the session is
+// known and the first real frame is ready. The login screen renders underneath
+// the splash, where it cannot be seen.
+// ----------------------------------------------------------------------------
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
+let splashHidden = false;
+
+function hideSplash() {
+  if (splashHidden) return;
+  splashHidden = true;
+  SplashScreen.hideAsync().catch(() => {});
+}
+
 
 /**
  * Last line of defence.
@@ -64,6 +102,16 @@ export default function RootLayout() {
   const router = useRouter();
   const segments = useSegments();
 
+  // Resolved once, from the very first render. "Where the app was headed when
+  // it launched" - the login index on a normal cold start, or a deep-linked
+  // route when a notification/email link opened the app.
+  const startRoute = useRef(segments[0]);
+
+  // Session restore result. `ready` gates the splash, `hasSession` decides
+  // whether we are going to the dashboard (and therefore whether it is worth
+  // waiting for that screen's first paint).
+  const [boot, setBoot] = useState({ ready: false, hasSession: false });
+
   // Tapping a push notification navigates to the right screen AND removes that
   // notification from the Android tray. Without this the tray entry stayed
   // forever, which is why days-old notifications were still visible.
@@ -86,27 +134,131 @@ export default function RootLayout() {
   // ---- AUTH GATE -----------------------------------------------------------
   // Every screen except login + forgot-password requires a valid session.
   // This is a UX guard only - the real boundary is Postgres RLS.
+  //
+  // Split into two effects on purpose:
+  //   A. BOOTSTRAP (mount only) - hydrate the dashboard cache, resolve the
+  //      session, redirect exactly once, then release the splash.
+  //   B. ONGOING (authReady + segments) - keep signing in/out and deep links
+  //      honest afterwards.
   useEffect(() => {
+    let mounted = true;
+
+    async function bootstrap() {
+      // Parallel: a local AsyncStorage read and a local secure-storage read.
+      // Doing the cache first means the dashboard's very first frame already
+      // has the last-known numbers instead of zeros.
+      const [{ data }] = await Promise.all([
+        supabase.auth.getSession(),
+        hydrateDashboardCache(),
+      ]);
+
+      if (!mounted) return;
+
+      const session = data.session;
+      const current = startRoute.current;
+
+      // Redirect once. If the app was opened on a real route (deep link from a
+      // notification or a reset email) we stay put and let that screen render.
+      // claimAuthRedirect() makes this a no-op if something else got there
+      // first, so the transition can never run twice.
+      if (session) {
+        if (current === undefined && claimAuthRedirect('/dashboard', 'index')) {
+          router.replace('/dashboard');
+        }
+      } else if (
+        current !== undefined &&
+        !PUBLIC_ROUTES.includes(current) &&
+        claimAuthRedirect('/', current)
+      ) {
+        router.replace('/');
+      }
+
+      setBoot({ ready: true, hasSession: !!session });
+    }
+
+    bootstrap();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // ---- SPLASH RELEASE ------------------------------------------------------
+  // The splash is what hides the login route during session restore. It comes
+  // down when we know where we are, and - when that destination is the
+  // dashboard - once the dashboard has real numbers on screen, so the first
+  // thing the user sees is the finished screen.
+  useEffect(() => {
+    if (!boot.ready) return;
+
+    // Signed in and launching into the dashboard: give its first load a
+    // moment to land, but never block on it.
+    if (boot.hasSession && startRoute.current === undefined) {
+      let cancelled = false;
+
+      waitForFirstDashboardPaint(FIRST_PAINT_BUDGET_MS).then(() => {
+        if (!cancelled) hideSplash();
+      });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // No session (login is the correct screen), or a deep link took us
+    // somewhere specific - show the app immediately.
+    hideSplash();
+  }, [boot.ready, boot.hasSession]);
+
+  // Absolute failsafe: if getSession() itself never settles, the user must not
+  // be trapped staring at the splash.
+  useEffect(() => {
+    const failsafe = setTimeout(hideSplash, SPLASH_FAILSAFE_MS);
+    return () => clearTimeout(failsafe);
+  }, []);
+
+  // ---- ONGOING AUTH GATE ---------------------------------------------------
+  useEffect(() => {
+    if (!boot.ready) return;
+
+    let mounted = true;
+
     const guard = (session: unknown) => {
+      if (!mounted) return;
+
       const current = segments[0];
       const isPublic = current === undefined || PUBLIC_ROUTES.includes(current);
 
+      // Typed routes: the target must stay a literal union, not `string`.
+      let target: '/' | '/dashboard' | null = null;
+
       if (!session && !isPublic) {
-        router.replace('/');
+        target = '/';
       } else if (session && current === undefined) {
-        // Already signed in and sitting on the login screen -> go to work.
-        router.replace('/dashboard');
+        target = '/dashboard';
       }
+
+      if (!target) return;
+
+      // Same destination from the same origin = a duplicate trigger (supabase's
+      // INITIAL_SESSION event, or the login screen's own navigation), not a real
+      // state change. Replacing again would restart the transition.
+      if (!claimAuthRedirect(target, current ?? 'index')) return;
+
+      router.replace(target);
     };
 
-    supabase.auth.getSession().then(({ data }) => guard(data.session));
-
+    // Subscribing AFTER the bootstrap getSession() has resolved is what stops
+    // INITIAL_SESSION from firing a second redirect on a cold start.
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       guard(session);
     });
 
-    return () => sub.subscription.unsubscribe();
-  }, [segments]);
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [boot.ready, segments]);
 
   // ---- DEEP LINKS (invite / password-reset emails) -------------------------
   // Links like flctaskcontrol://reset#access_token=... or ?code=... open the

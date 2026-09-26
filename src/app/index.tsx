@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { nav } from '../../lib/navigation';
+import { claimAuthRedirect, nav } from '../../lib/navigation';
 import { useState } from 'react';
 import {
   Image,
@@ -157,9 +157,15 @@ if (profileError || !email) {
     return;
   }
 
+// Signing in fires supabase's SIGNED_IN event, which the root-layout auth gate
+// also reacts to. Both used to call router.replace('/dashboard') in the same
+// tick, so the transition ran twice. Whichever gets there first claims it; the
+// other stands down. Exactly one navigation, exactly one transition.
+if (claimAuthRedirect('/dashboard', 'index')) {
   router.replace('/dashboard');
-}}
->
+}
+              }}
+            >
                 <Text style={styles.signInButtonText}>
                 SIGN IN
               </Text>

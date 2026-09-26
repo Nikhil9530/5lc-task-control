@@ -13,56 +13,54 @@ import {
   View,
 } from 'react-native';
 import { getMyId, getSessionProfile } from '../../lib/auth';
+import {
+  getDashboardCache,
+  markFirstDashboardPaint,
+  saveDashboardCache,
+  type DashboardCounts,
+} from '../../lib/dashboardCache';
 import { nav, navReplace } from '../../lib/navigation';
 import { registerPushToken } from '../../lib/registerPushToken';
 import { supabase } from '../../lib/supabase';
 import { AppPress, Skeleton } from '../../lib/ui';
 
-type Counts = {
-  active: number;
-  due_today: number;
-  overdue: number;
-  completed_today: number;
-  not_started: number;
-  in_progress: number;
-  waiting: number;
+const ZERO_COUNTS: DashboardCounts = {
+  active: 0,
+  due_today: 0,
+  overdue: 0,
+  completed_today: 0,
+  not_started: 0,
+  in_progress: 0,
+  waiting: 0,
 };
 
-// ----------------------------------------------------------------------------
-// Last-known KPI values, cached at module scope.
-//
-// WHY: this screen remounts every time you navigate back to it. Without a
-// cache the strip reset to zeros and the numbers visibly "popped in" once the
-// network answered - the laggy feel. Seeding state from the cache means the
-// strip paints with real numbers on the FIRST frame, then refreshes quietly.
-// ----------------------------------------------------------------------------
-let cachedCounts: Counts | null = null;
-let cachedUserName: string | null = null;
-let cachedUserRole: string | null = null;
-
 export default function DashboardScreen() {
-  // Seeded from cache -> correct on the first paint, no zero-flash.
-  const [counts, setCounts] = useState<Counts>(
-    cachedCounts ?? {
-      active: 0,
-      due_today: 0,
-      overdue: 0,
-      completed_today: 0,
-      not_started: 0,
-      in_progress: 0,
-      waiting: 0,
-    }
+  // Read once, synchronously, on the first render. _layout.tsx has already
+  // awaited hydrateDashboardCache() behind the splash screen, so on a cold
+  // start this is the LAST-KNOWN payload from AsyncStorage rather than null -
+  // which is what used to make the strip reset to zeros and then visibly
+  // repaint when the network answered.
+  const initial = getDashboardCache();
+
+  // Seeded from the cache -> correct on the first paint, no zero-flash.
+  const [counts, setCounts] = useState<DashboardCounts>(
+    initial.counts ?? ZERO_COUNTS
   );
   const [refreshing, setRefreshing] = useState(false);
-  const [userName, setUserName] = useState(cachedUserName ?? 'Super Admin');
-  const [userRole, setUserRole] = useState(cachedUserRole ?? '');
-  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
+  const [userName, setUserName] = useState(
+    initial.user?.fullName ?? 'Super Admin'
+  );
+  const [userRole, setUserRole] = useState(initial.user?.role ?? '');
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(
+    initial.unread
+  );
 
   // First network answer still pending AND nothing cached? Then (and only
-  // then) show skeleton rows that hold layout. On every return visit the
-  // seeded numbers paint instantly and these never appear.
+  // then) show skeleton rows that hold layout. On every return visit, and on
+  // every cold start after the first, the seeded numbers paint instantly and
+  // these never appear.
   const [bootstrapping, setBootstrapping] = useState(
-    cachedCounts === null
+    initial.counts === null
   );
 
   const pushRegistered = useRef(false);
@@ -75,6 +73,9 @@ export default function DashboardScreen() {
   // instance #2 stays on the skeleton forever. Per-instance ref = each
   // instance owns its own request and its own state updates.
   const inFlightRef = useRef<Promise<void> | null>(null);
+
+  // Flips once the first load settles, so later header changes are persisted.
+  const didLoadRef = useRef(false);
 
   useEffect(() => {
     async function registerPush() {
@@ -123,16 +124,28 @@ export default function DashboardScreen() {
           supabase.rpc('dashboard_counts', { p_today: today }),
         ]);
 
-        setUserName(profile?.full_name ?? 'Super Admin');
-        setUserRole(profile?.role ?? '');
-        setHasUnreadNotifications((unreadResult.count ?? 0) > 0);
+        const nextName = profile?.full_name ?? 'Super Admin';
+        const nextRole = profile?.role ?? '';
+        const nextUnread = (unreadResult.count ?? 0) > 0;
 
-        const next = countsResult.data as Counts | null;
+        setUserName(nextName);
+        setUserRole(nextRole);
+        setHasUnreadNotifications(nextUnread);
+
+        const next = countsResult.data as DashboardCounts | null;
 
         if (next) {
-          cachedCounts = next;
           setCounts(next);
         }
+
+        // Mirror to the shared cache. It backs this screen's state on the next
+        // mount AND survives a process kill via AsyncStorage, which is what
+        // makes a cold start paint real numbers on the first frame.
+        saveDashboardCache({
+          counts: next ?? undefined,
+          user: { fullName: nextName, role: nextRole },
+          unread: nextUnread,
+        });
       } catch (e) {
         // Never blank the screen on a transient failure - the cached numbers
         // stay on screen and the pull-to-refresh still works.
@@ -142,8 +155,13 @@ export default function DashboardScreen() {
         // no second request can start while this one is still in flight, so
         // an unconditional clear is safe.
         inFlightRef.current = null;
+        didLoadRef.current = true;
         setBootstrapping(false);
         setRefreshing(false);
+
+        // Releases the splash screen held by _layout.tsx, so the first frame
+        // the user sees is this screen with data rather than placeholders.
+        markFirstDashboardPaint();
       }
     })();
 
@@ -178,13 +196,13 @@ export default function DashboardScreen() {
     return () => clearTimeout(failsafe);
   }, [bootstrapping]);
 
-  // Persist the header values for the next mount.
+  // Persist the header values for the next mount (including a full name edited
+  // from another screen). Gated on the first completed load so the "Super Admin"
+  // placeholder can never be written to disk and outlive the app.
   useEffect(() => {
-    cachedUserName = userName;
-  }, [userName]);
-  useEffect(() => {
-    cachedUserRole = userRole;
-  }, [userRole]);
+    if (!didLoadRef.current) return;
+    saveDashboardCache({ user: { fullName: userName, role: userRole } });
+  }, [userName, userRole]);
 
   const {
     active: activeTasks,
