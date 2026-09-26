@@ -39,8 +39,6 @@ type Counts = {
 let cachedCounts: Counts | null = null;
 let cachedUserName: string | null = null;
 let cachedUserRole: string | null = null;
-/** In-flight guard so focus + mount can never double-fire the queries. */
-let inFlight: Promise<void> | null = null;
 
 export default function DashboardScreen() {
   // Seeded from cache -> correct on the first paint, no zero-flash.
@@ -69,6 +67,15 @@ export default function DashboardScreen() {
 
   const pushRegistered = useRef(false);
 
+  // In-flight guard is COMPONENT-LOCAL, not module-global. A module-level
+  // promise would be shared across Dashboard instances: if instance #1 starts
+  // a load and the cold-start auth gate replaces it (router.navigate during
+  // session restore), instance #2 inherits instance #1's promise - and its
+  // setCounts/setBootstrapping calls land on the UNMOUNTED instance #1, so
+  // instance #2 stays on the skeleton forever. Per-instance ref = each
+  // instance owns its own request and its own state updates.
+  const inFlightRef = useRef<Promise<void> | null>(null);
+
   useEffect(() => {
     async function registerPush() {
       if (pushRegistered.current) return;
@@ -84,10 +91,11 @@ export default function DashboardScreen() {
   }, []);
 
   const loadDashboard = useCallback(async () => {
-    // Collapse concurrent calls (mount + focus racing) into one request.
-    if (inFlight) return inFlight;
+    // Collapse concurrent calls (mount + focus racing) into one request -
+    // scoped to THIS instance only.
+    if (inFlightRef.current) return inFlightRef.current;
 
-    inFlight = (async () => {
+    const request = (async () => {
       try {
         // Shared session identity: ONE local secure-storage read + ONE
         // profiles row for the whole session, promise-deduped across screens.
@@ -130,13 +138,17 @@ export default function DashboardScreen() {
         // stay on screen and the pull-to-refresh still works.
         console.log('Load dashboard error:', e);
       } finally {
-        inFlight = null;
+        // Component-local guard: only this instance's requests write here, and
+        // no second request can start while this one is still in flight, so
+        // an unconditional clear is safe.
+        inFlightRef.current = null;
         setBootstrapping(false);
         setRefreshing(false);
       }
     })();
 
-    return inFlight;
+    inFlightRef.current = request;
+    return request;
   }, []);
 
   // Kick off the first load on MOUNT as well as on focus.
