@@ -6,12 +6,17 @@
 -- Supabase SQL Editor, ONE BLOCK AT A TIME, blocks 1 to 6, in order.
 -- Each block is self-contained and idempotent, so a block is safe to re-run.
 --
--- Keep every line short. The editor mangles very long pasted lines: an earlier
--- attempt put this function's whole parameter list on one ~200 character line,
--- the editor wrapped it, and the damage surfaced further down the script as
---     ERROR: 42601: syntax error at or near "perform"
--- Nothing was wrong with the SQL itself. If a block fails, check for a line
--- that is much longer than the others in it.
+-- Two paste traps this file avoids, both hit in practice:
+--   1. LONG LINES. The editor mangles a very long pasted line. An earlier
+--      attempt put this function's whole parameter list on one 200 character
+--      line and the damage surfaced further down as
+--          ERROR: 42601: syntax error at or near "perform"
+--      Nothing was wrong with the SQL. No line here exceeds 80 characters.
+--   2. TRUNCATED SELECTION. Selecting a long block and half-pasting it leaves
+--      an unterminated dollar quote:
+--          ERROR: 42601: unterminated dollar-quoted string
+--      The echoed text in the error always shows where the paste stopped.
+--      Paste a whole block, then confirm the error is absent.
 --
 -- WHAT IT DOES
 -- ------------
@@ -135,6 +140,16 @@ revoke all on function public.notify_task_monitor(
   text
 ) from public;
 
+grant execute on function public.notify_task_monitor(
+  uuid,
+  text,
+  text,
+  text,
+  text,
+  uuid,
+  text
+) to authenticated;
+
 -- ############################################################################
 -- BLOCK 2 - a new comment reaches the monitor
 --
@@ -149,13 +164,8 @@ set search_path = public
 as $$
 begin
   perform public.notify_task_monitor(
-    new.task_id,
-    'comment',
-    'task_commented',
-    'Task Update',
-    'commented on',
-    new.user_id,
-    'mon:comment:' || new.id::text
+    new.task_id, 'comment', 'task_commented', 'Task Update',
+    'commented on', new.user_id, 'mon:comment:' || new.id::text
   );
 
   return new;
@@ -191,40 +201,25 @@ as $$
 begin
   if new.status is distinct from old.status then
     perform public.notify_task_monitor(
-      new.id,
-      'status',
-      'task_status',
-      'Task Update',
-      'changed the status of',
-      auth.uid(),
-      'mon:status:' || new.id::text
-        || ':' || new.updated_at::text
+      new.id, 'status', 'task_status', 'Task Update',
+      'changed the status of', auth.uid(),
+      'mon:status:' || new.id::text || ':' || new.updated_at::text
     );
   end if;
 
   if new.assigned_to is distinct from old.assigned_to then
     perform public.notify_task_monitor(
-      new.id,
-      'reassigned',
-      'task_reassigned',
-      'Task Delegated',
-      'reassigned',
-      auth.uid(),
-      'mon:reassigned:' || new.id::text
-        || ':' || new.updated_at::text
+      new.id, 'reassigned', 'task_reassigned', 'Task Delegated',
+      'reassigned', auth.uid(),
+      'mon:reassigned:' || new.id::text || ':' || new.updated_at::text
     );
   end if;
 
   if new.due_date is distinct from old.due_date then
     perform public.notify_task_monitor(
-      new.id,
-      'due',
-      'task_due_changed',
-      'Task Update',
-      'changed the due date of',
-      auth.uid(),
-      'mon:due:' || new.id::text
-        || ':' || new.updated_at::text
+      new.id, 'due', 'task_due_changed', 'Task Update',
+      'changed the due date of', auth.uid(),
+      'mon:due:' || new.id::text || ':' || new.updated_at::text
     );
   end if;
 
@@ -247,6 +242,9 @@ create trigger tasks_notify_monitor
 -- self-notification guard means a Director who assigns the task is skipped, so
 -- it is normally a no-op. It exists for a task created on someone else's
 -- behalf.
+--
+-- Kept deliberately short: a long argument list is easy to half-paste, and a
+-- truncated paste leaves an unterminated dollar quote.
 -- ############################################################################
 create or replace function public.tg_tasks_notify_monitor_insert()
 returns trigger
@@ -254,11 +252,27 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_key text;
 begin
+  v_key := 'mon:assigned:' || new.id::text;
+
   perform public.notify_task_monitor(
-    new.id,
-    'assigned',
-    'task_assigned',
+    new.id, 'assigned', 'task_assigned', 'Task Assigned',
+    'assigned', coalesce(new.assigned_by, new.created_by), v_key
+  );
+
+  return new;
+end;
+$$;
+
+drop trigger if exists tasks_notify_monitor_insert on public.tasks;
+
+create trigger tasks_notify_monitor_insert
+  after insert on public.tasks
+  for each row
+  execute function public.tg_tasks_notify_monitor_insert();
+
 
 -- ############################################################################
 -- BLOCK 5 - extensions reach BOTH the upline and the monitor
@@ -304,12 +318,7 @@ begin
   end if;
 
   perform public.notify_task_monitor(
-    new.task_id,
-    v_event,
-    v_event,
-    v_title,
-    v_verb,
-    v_actor,
+    new.task_id, v_event, v_event, v_title, v_verb, v_actor,
     'mon:' || v_event || ':' || new.id::text
   );
 
@@ -341,8 +350,8 @@ create trigger extensions_notify_monitor
 -- HONEST LIMIT: this guarantees the monitoring SCREEN has no write path. It
 -- cannot revoke the write that tasks_update already grants a director, because
 -- the app legitimately needs that elsewhere. Closing that last gap means moving
--- every task write behind its own RPC. That is a separate, riskier
--- change, deliberately not bundled here.
+-- every task write behind its own RPC. That is a separate, riskier change,
+-- deliberately not bundled here.
 -- ############################################################################
 create or replace function public.task_monitoring_snapshot(
   p_task_id uuid
@@ -396,30 +405,3 @@ revoke all on function public.task_monitoring_snapshot(uuid)
 grant execute on function public.task_monitoring_snapshot(uuid)
   to authenticated;
 
-    'Task Assigned',
-    'assigned',
-    coalesce(new.assigned_by, new.created_by),
-    'mon:assigned:' || new.id::text
-  );
-
-  return new;
-end;
-$$;
-
-drop trigger if exists tasks_notify_monitor_insert on public.tasks;
-
-create trigger tasks_notify_monitor_insert
-  after insert on public.tasks
-  for each row
-  execute function public.tg_tasks_notify_monitor_insert();
-
-
-grant execute on function public.notify_task_monitor(
-  uuid,
-  text,
-  text,
-  text,
-  text,
-  uuid,
-  text
-) to authenticated;
