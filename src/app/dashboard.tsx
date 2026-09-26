@@ -84,7 +84,7 @@ export default function DashboardScreen() {
   }, []);
 
   const loadDashboard = useCallback(async () => {
-    // Collapse concurrent calls (focus + mount racing) into one request.
+    // Collapse concurrent calls (mount + focus racing) into one request.
     if (inFlight) return inFlight;
 
     inFlight = (async () => {
@@ -139,11 +139,32 @@ export default function DashboardScreen() {
     return inFlight;
   }, []);
 
+  // Kick off the first load on MOUNT as well as on focus.
+  //
+  // On a cold start the auth gate in _layout.tsx does router.replace() while
+  // the navigation stack is still settling, so this screen can already be
+  // focused by the time useFocusEffect subscribes - its callback then never
+  // fires and the dashboard sits on skeletons (default "Super Admin" greeting,
+  // empty KPIs) until you navigate away and come back. The inFlight guard
+  // makes the two triggers collapse into a single request.
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
   useFocusEffect(
     useCallback(() => {
       loadDashboard();
     }, [loadDashboard])
   );
+
+  // Failsafe: never let the skeleton hang forever if a request stalls
+  // (e.g. app opened offline). Clear it after 10s; a later successful load
+  // still replaces the numbers, and pull-to-refresh always works.
+  useEffect(() => {
+    if (!bootstrapping) return;
+    const failsafe = setTimeout(() => setBootstrapping(false), 10000);
+    return () => clearTimeout(failsafe);
+  }, [bootstrapping]);
 
   // Persist the header values for the next mount.
   useEffect(() => {
