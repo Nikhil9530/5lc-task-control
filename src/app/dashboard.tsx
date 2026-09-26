@@ -243,6 +243,29 @@ export default function DashboardScreen() {
   const isDirector = ['director', 'super_admin'].includes(userRole);
   const scopeLabel = isDirector ? 'Company-wide' : 'Your team';
 
+  // ---- KPI DRILL-DOWN ------------------------------------------------------
+  // Each card opens the task list pre-filtered to exactly the population the
+  // number counts. The list's predicates mirror dashboard_counts() in migration
+  // 0019, so the count on the card always equals the length of the list.
+  //
+  // For Director/Super Admin the list is company-wide (RLS already permits it);
+  // readonly=1 opens task-detail in its monitoring mode, which is read-only.
+  //
+  // Declared AFTER isDirector - referencing it earlier would be a temporal dead
+  // zone error on the very first render.
+  const openKpiList = useCallback(
+    (filter: 'active' | 'due_today' | 'overdue' | 'completed_today') => {
+      nav({
+        pathname: '/tasks',
+        params: {
+          filter,
+          ...(isDirector ? { readonly: '1' } : null),
+        },
+      });
+    },
+    [isDirector]
+  );
+
 const ActionCard = memo(function ActionCard({
   icon,
   title,
@@ -305,15 +328,21 @@ const KpiCard = memo(function KpiCard({
   iconBg,
   value,
   label,
+  onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   iconColor: string;
   iconBg: string;
   value: number;
   label: string;
+  onPress?: () => void;
 }) {
   return (
-    <View style={styles.kpiCard}>
+    <AppPress
+      style={styles.kpiCard}
+      onPress={onPress}
+      disabled={!onPress}
+    >
       <View style={[styles.kpiIcon, { backgroundColor: iconBg }]}>
         <Ionicons name={icon} size={23} color={iconColor} />
       </View>
@@ -321,7 +350,13 @@ const KpiCard = memo(function KpiCard({
       <Text style={styles.kpiNumber}>{value}</Text>
 
       <Text style={styles.kpiLabel}>{label}</Text>
-    </View>
+
+      {/* Only rendered when the card actually navigates, so a static card never
+          looks tappable. */}
+      {onPress ? (
+        <Ionicons name="chevron-forward" size={14} color="#9AA2AC" />
+      ) : null}
+    </AppPress>
   );
 });
 
@@ -438,6 +473,7 @@ const StatusRow = memo(function StatusRow({
               iconBg="#EAF1F9"
               value={activeTasks}
               label="Active Tasks"
+              onPress={() => openKpiList('active')}
             />
 
             <KpiCard
@@ -446,6 +482,7 @@ const StatusRow = memo(function StatusRow({
               iconBg="#FFF0E5"
               value={dueToday}
               label="Due Today"
+              onPress={() => openKpiList('due_today')}
             />
 
             <KpiCard
@@ -454,6 +491,7 @@ const StatusRow = memo(function StatusRow({
               iconBg="#FDEBEC"
               value={overdue}
               label="Overdue"
+              onPress={() => openKpiList('overdue')}
             />
 
             <KpiCard
@@ -462,6 +500,7 @@ const StatusRow = memo(function StatusRow({
               iconBg="#E8F6EF"
               value={completedToday}
               label="Completed Today"
+              onPress={() => openKpiList('completed_today')}
             />
           </View>
         )}

@@ -82,7 +82,20 @@ const statusOptions: {
 ];
 
 export default function TaskDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, readonly } = useLocalSearchParams<{
+    id: string;
+    readonly?: string;
+  }>();
+
+  // MONITORING MODE.
+  //
+  // Opened from a dashboard KPI list (a Director/Super Admin tapping "Active
+  // Tasks" etc). The screen becomes a read-only observer: every write
+  // affordance is suppressed below, and the activity data is read through
+  // task_monitoring_snapshot() in migration 0022 - a STABLE, SECURITY DEFINER
+  // function that can only ever return data, and returns nothing at all unless
+  // the caller is entitled to see that task.
+  const isMonitoring = readonly === '1';
 
   const [task, setTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
@@ -205,12 +218,87 @@ async function addComment() {
   setCommentSending(false);
 }
 
-useEffect(() => {
-  loadTask();
-  loadHistory();
-  loadComments();
-  loadChain();
-}, [id]);
+  // ---- MONITORING READ PATH ------------------------------------------------
+  // In monitoring mode the whole activity view comes from ONE server call:
+  // task_monitoring_snapshot() (migration 0022). That function is STABLE, so it
+  // cannot write, and it is SECURITY DEFINER, so the entitlement check runs in
+  // the database - a caller with no relationship to the task gets NULL rather
+  // than data. Three separate client queries are also collapsed into one.
+  async function loadMonitoringSnapshot() {
+    if (!id) return;
+
+    setLoading(true);
+    setHistoryLoading(true);
+    setCommentLoading(true);
+
+    const { data, error } = await supabase.rpc('task_monitoring_snapshot', {
+      p_task_id: id,
+    });
+
+    if (error) {
+      console.log('Monitoring snapshot error:', error.message);
+      setLoading(false);
+      setHistoryLoading(false);
+      setCommentLoading(false);
+      return;
+    }
+
+    if (!data) {
+      // Server refused: render nothing rather than a half-populated task.
+      setTask(null);
+      setHistory([]);
+      setComments([]);
+      setLoading(false);
+      setHistoryLoading(false);
+      setCommentLoading(false);
+      return;
+    }
+
+    setTask((data.task as Task) ?? null);
+
+    // The snapshot returns raw rows (an RPC has no PostgREST embedding), so
+    // display names are hydrated here from the directory RLS already exposes.
+    const rows = [
+      ...((data.history ?? []) as any[]),
+      ...((data.comments ?? []) as any[]),
+    ];
+    const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))] as string[];
+    const names = new Map<string, string>();
+
+    if (ids.length) {
+      const { data: people } = await supabase
+        .from('profiles')
+        .select('id, full_name')
+        .in('id', ids);
+
+      (people ?? []).forEach((p) => names.set(p.id, p.full_name));
+    }
+
+    const withName = (row: any) => ({
+      ...row,
+      profiles: row.user_id ? { full_name: names.get(row.user_id) } : null,
+    });
+
+    setHistory(((data.history ?? []) as any[]).map(withName));
+    setComments(((data.comments ?? []) as any[]).map(withName));
+
+    setLoading(false);
+    setHistoryLoading(false);
+    setCommentLoading(false);
+  }
+
+  useEffect(() => {
+    if (isMonitoring) {
+      loadMonitoringSnapshot();
+      loadChain();
+      return;
+    }
+
+    loadTask();
+    loadHistory();
+    loadComments();
+    loadChain();
+  }, [id, isMonitoring]);
 
 async function loadChain() {
   if (!id) return;
@@ -386,11 +474,18 @@ async function confirmStatusUpdate() {
   const actor: TaskActor = isAdmin ? 'admin' : isDoer ? 'doer' : 'reviewer';
 
   // Only statuses the server will actually accept are offered.
-  const nextStatuses = task ? allowedNextStatuses(task.status, actor) : [];
+  // In monitoring mode NOTHING is offered - that is what makes this view
+  // read-only rather than merely looking read-only.
+  const nextStatuses =
+    isMonitoring || !task ? [] : allowedNextStatuses(task.status, actor);
 
   // Why the controls are hidden, phrased for whoever is looking.
   function statusLockedReason(): string {
     if (!task) return '';
+
+    if (isMonitoring) {
+      return 'You are monitoring this task. Change the status, comment, or request an extension from the task itself.';
+    }
 
     if (task.status === 'completed') {
       return 'This task is completed and locked. Only a manager or director can reopen it.';
@@ -591,6 +686,14 @@ async function confirmStatusUpdate() {
               </Text>
             </View>
           </View>
+          {isMonitoring && (
+            <View style={styles.monitorBanner}>
+              <Ionicons name="eye-outline" size={16} color="#E87516" />
+              <Text style={styles.monitorBannerText}>
+                MONITORING — read only
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* DELEGATION CHAIN */}
@@ -657,7 +760,7 @@ async function confirmStatusUpdate() {
             </View>
           )}
 
-          {canDelegate && (
+          {canDelegate && !isMonitoring && (
             <AppPress
               style={styles.delegateButton}
               onPress={() =>
@@ -817,8 +920,10 @@ async function confirmStatusUpdate() {
           )}
         </View>
 
-        {/* REQUEST EXTENSION */}
-<View style={styles.actionCard}>
+        {/* REQUEST EXTENSION - hidden entirely in monitoring mode, since a
+            monitor must never be able to alter the task they are watching. */}
+        {!isMonitoring && (
+        <View style={styles.actionCard}>
   <Text style={styles.actionTitle}>
     Request Extension
   </Text>
@@ -1158,7 +1263,8 @@ async function confirmStatusUpdate() {
       </View>
     </View>
   )}
-</View> 
+</View>
+)}
 
         {/* TASK HISTORY */}
 <View style={styles.historyCard}>
@@ -1345,6 +1451,9 @@ async function confirmStatusUpdate() {
             </View>
           )}
 
+          {/* Read-only in monitoring mode: a monitor observes the conversation
+              but never joins it. */}
+          {!isMonitoring && (
           <View style={styles.commentInputRow}>
             <TextInput
               value={commentText}
@@ -1378,6 +1487,21 @@ async function confirmStatusUpdate() {
               )}
             </AppPress>
           </View>
+          )}
+
+          {isMonitoring && (
+            <View style={styles.monitorNote}>
+              <Ionicons
+                name="eye-outline"
+                size={15}
+                color="#66717F"
+              />
+              <Text style={styles.monitorNoteText}>
+                Monitoring view — read only. Open the task to comment or change
+                its status.
+              </Text>
+            </View>
+          )}
         </View>
 
       </ScrollView>
@@ -1850,6 +1974,41 @@ historyUser: {
   fontSize: 10,
   fontWeight: '700',
   marginTop: 4,
+},
+
+monitorBanner: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 7,
+  marginTop: 14,
+  alignSelf: 'flex-start',
+  paddingHorizontal: 11,
+  paddingVertical: 7,
+  borderRadius: 15,
+  backgroundColor: '#FFF0E5',
+},
+monitorBannerText: {
+  color: '#D9630A',
+  fontSize: 10,
+  fontWeight: '900',
+  letterSpacing: 0.8,
+},
+
+monitorNote: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+  marginTop: 14,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  borderRadius: 8,
+  backgroundColor: '#F4F6F8',
+},
+monitorNoteText: {
+  flex: 1,
+  color: '#66717F',
+  fontSize: 11,
+  lineHeight: 15,
 },
 
 commentInputRow: {

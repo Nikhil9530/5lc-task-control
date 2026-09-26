@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { goBack, nav } from '../../lib/navigation';
-import { getMyId } from '../../lib/auth';
+import { getMyId, getSessionProfile } from '../../lib/auth';
 import { memo, useCallback, useEffect, useState } from 'react';
+import { useLocalSearchParams } from 'expo-router';
 import {
   FlatList,
   RefreshControl,
@@ -12,6 +13,24 @@ import {
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { AppPress, EmptyState, SkeletonCard } from '../../lib/ui';
+
+// The four dashboard KPI cards deep-link here with ?filter=<key>.
+//
+// WHY THE PREDICATES ARE COPIED VERBATIM
+// -------------------------------------
+// These MUST stay identical to the filters inside dashboard_counts() in
+// migration 0019. If they drift, the number on the card stops matching the
+// length of the list it opens, which reads as a bug to the user even though
+// both screens are individually "correct". Change one, change both.
+type TaskFilter = 'active' | 'due_today' | 'overdue' | 'completed_today';
+
+const FILTER_TITLES: Record<TaskFilter, string> = {
+  active: 'Active Tasks',
+  due_today: 'Due Today',
+  overdue: 'Overdue',
+  completed_today: 'Completed Today',
+};
+
 
 type Task = {
   id: string;
@@ -30,6 +49,7 @@ type Task = {
 
 // Precompute once per render, not inside every row.
 const TODAY = new Date().toISOString().split('T')[0];
+
 
 function isOverdue(task: Task) {
   if (!task.due_date || task.status === 'completed') {
@@ -50,7 +70,13 @@ function formatPriority(priority: Task['priority']) {
 // Memoized so a refresh that returns the same list does not re-render every
 // row. Before this, renderTask was a new closure per render, which defeated
 // memoization and made long lists scroll sluggishly.
-const TaskRow = memo(function TaskRow({ item }: { item: Task }) {
+const TaskRow = memo(function TaskRow({
+  item,
+  readonly,
+}: {
+  item: Task;
+  readonly?: boolean;
+}) {
   const overdue = isOverdue(item);
 
   return (
@@ -59,7 +85,9 @@ const TaskRow = memo(function TaskRow({ item }: { item: Task }) {
       onPress={() =>
         nav({
           pathname: '/task-detail',
-          params: { id: item.id },
+          // readonly=1 tells task-detail to render the monitoring view: no
+          // status buttons, no comment box, no edit affordances.
+          params: readonly ? { id: item.id, readonly: '1' } : { id: item.id },
         })
       }
     >
@@ -115,9 +143,24 @@ const TaskRow = memo(function TaskRow({ item }: { item: Task }) {
 });
 
 export default function TasksScreen() {
+  const { filter, readonly } = useLocalSearchParams<{
+    filter?: string;
+    readonly?: string;
+  }>();
+
+  const taskFilter = (
+    filter && filter in FILTER_TITLES ? filter : null
+  ) as TaskFilter | null;
+
+  // The monitoring list is read-only: tapping a task opens task-detail with
+  // every write control suppressed.
+  const isMonitoring = readonly === '1';
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Drives the "Company-wide" / "Assigned to you" subtitle.
+  const [isCompanyWideScope, setIsCompanyWideScope] = useState(false);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -129,16 +172,53 @@ export default function TasksScreen() {
         return;
       }
 
-      const { data, error } = await supabase
+      // Director/Super Admin see the WHOLE company; everyone else is restricted
+      // to work assigned to them. No RLS change is needed for this - the
+      // tasks_select policy already grants those two roles every row, so
+      // dropping the assignee filter is all it takes.
+      const profile = await getSessionProfile();
+      const isCompanyWide =
+        profile?.role === 'director' || profile?.role === 'super_admin';
+
+      setIsCompanyWideScope(isCompanyWide);
+
+      let query = supabase
         .from('tasks')
         .select(
-          'id, title, description, priority, status, due_date, parent_task_id'
-        )
-        .eq('assigned_to', userId)
-        .order('due_date', {
-          ascending: true,
-          nullsFirst: false,
-        });
+          'id, title, description, priority, status, due_date, parent_task_id, assigned_to, completed_at'
+        );
+
+      if (!isCompanyWide) {
+        query = query.eq('assigned_to', userId);
+      }
+
+      // --- filters, mirroring dashboard_counts() in migration 0019 ---------
+      switch (taskFilter) {
+        case 'active':
+          query = query.neq('status', 'completed');
+          break;
+
+        case 'due_today':
+          query = query.eq('due_date', TODAY).neq('status', 'completed');
+          break;
+
+        case 'overdue':
+          query = query.lt('due_date', TODAY).neq('status', 'completed');
+          break;
+
+        case 'completed_today':
+          // 0019 compares against midnight UTC of the current day.
+          query = query
+            .eq('status', 'completed')
+            .gte('completed_at', `${TODAY}T00:00:00Z`);
+          break;
+      }
+      // ----------------------------------------------------------------------
+
+      const { data, error } = await query.order('due_date', {
+        ascending: true,
+        nullsFirst: false,
+      });
 
       if (error) {
         console.log('Load tasks error:', error.message);
@@ -150,7 +230,7 @@ export default function TasksScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [taskFilter]);
 
   useEffect(() => {
     loadTasks();
@@ -162,8 +242,10 @@ export default function TasksScreen() {
   }, [loadTasks]);
 
   const renderTask = useCallback(
-    ({ item }: { item: Task }) => <TaskRow item={item} />,
-    []
+    ({ item }: { item: Task }) => (
+      <TaskRow item={item} readonly={isMonitoring} />
+    ),
+    [isMonitoring]
   );
 
   return (
@@ -175,10 +257,16 @@ export default function TasksScreen() {
           </AppPress>
 
           <View style={styles.headerText}>
-            <Text style={styles.title}>Tasks</Text>
+            <Text style={styles.title}>
+              {taskFilter ? FILTER_TITLES[taskFilter] : 'Tasks'}
+            </Text>
 
             <Text style={styles.subtitle}>
-              Company Task Management
+              {taskFilter
+                ? isCompanyWideScope
+                  ? 'Company-wide'
+                  : 'Assigned to you'
+                : 'Company Task Management'}
             </Text>
           </View>
         </View>
