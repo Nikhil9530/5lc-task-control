@@ -3,15 +3,15 @@
 --
 -- HOW TO RUN THIS
 -- ---------------
--- Run in the Supabase SQL Editor ONE BLOCK AT A TIME, blocks 1 to 6, in order.
--- Each block is self-contained and idempotent ("create or replace" /
--- "if exists"), so a block can safely be re-run.
+-- Supabase SQL Editor, ONE BLOCK AT A TIME, blocks 1 to 6, in order.
+-- Each block is self-contained and idempotent, so a block is safe to re-run.
 --
--- Do NOT paste the whole file at once. The dashboard editor splits pasted text
--- on semicolons, and plpgsql bodies are full of them, so a body gets cut in
--- half and you get a bogus error like:
+-- Keep every line short. The editor mangles very long pasted lines: an earlier
+-- attempt put this function's whole parameter list on one ~200 character line,
+-- the editor wrapped it, and the damage surfaced further down the script as
 --     ERROR: 42601: syntax error at or near "perform"
--- That error is an artifact of the paste, not a fault in this SQL.
+-- Nothing was wrong with the SQL itself. If a block fails, check for a line
+-- that is much longer than the others in it.
 --
 -- WHAT IT DOES
 -- ------------
@@ -44,7 +44,15 @@
 -- ############################################################################
 -- BLOCK 1 - the helper every monitor notification funnels through
 -- ############################################################################
-create or replace function public.notify_task_monitor(p_task_id uuid, p_event text, p_type text, p_title text, p_verb text, p_actor uuid default null, p_dedupe text default null)
+create or replace function public.notify_task_monitor(
+  p_task_id uuid,
+  p_event text,
+  p_type text,
+  p_title text,
+  p_verb text,
+  p_actor uuid default null,
+  p_dedupe text default null
+)
 returns void
 language plpgsql
 security definer
@@ -55,41 +63,77 @@ declare
   v_monitor uuid;
   v_actor text;
 begin
-  select * into v_task from public.tasks where id = p_task_id;
+  select *
+  into v_task
+  from public.tasks
+  where id = p_task_id;
+
   if not found then
     return;
   end if;
 
-  -- CONSTRAINT 1: the monitor must be a director/super_admin who is a PARTY to
-  -- THIS task. coalesce means one person, so a single event can never fan out
-  -- to the same human twice.
-  select p.id into v_monitor from public.profiles p
-    where p.id = coalesce(v_task.assigned_by, v_task.created_by)
-      and p.role in ('director', 'super_admin');
+  -- Monitor = Director/Super Admin who assigned or created this task.
+  select p.id
+  into v_monitor
+  from public.profiles p
+  where p.id = coalesce(v_task.assigned_by, v_task.created_by)
+    and p.role in ('director', 'super_admin');
 
+  -- No Director/Super Admin monitor = no monitor notification.
   if v_monitor is null then
     return;
   end if;
 
-  -- CONSTRAINT 2: never notify the actor about their own action.
+  -- Never notify someone about their own action.
   if p_actor is not null and v_monitor = p_actor then
     return;
   end if;
 
-  select full_name into v_actor from public.profiles where id = p_actor;
+  select full_name
+  into v_actor
+  from public.profiles
+  where id = p_actor;
 
-  -- CONSTRAINT 3: one row per person per event occurrence. Callers pass a key
-  -- unique to the occurrence (the row id, or the task's new updated_at), so a
-  -- task may legitimately move in_progress -> waiting -> in_progress and still
-  -- notify each time.
-  insert into public.notifications (user_id, type, title, message, task_id, dedupe_key)
+  insert into public.notifications (
+    user_id,
+    type,
+    title,
+    message,
+    task_id,
+    dedupe_key
+  )
   values (
     v_monitor,
     p_type,
     p_title,
-    coalesce(v_actor, 'Someone') || ' ' || p_verb || ' "' || v_task.title || '" now ' || replace(v_task.status, '_', ' '),
+    coalesce(v_actor, 'Someone')
+      || ' '
+      || p_verb
+      || ' "'
+      || v_task.title
+      || '" now '
+      || replace(v_task.status, '_', ' '),
     p_task_id,
-    coalesce(p_dedupe, 'mon:' || p_event || ':' || p_task_id::text)
+    coalesce(
+      p_dedupe,
+      'mon:' || p_event || ':' || p_task_id::text
+    )
+  )
+  on conflict (dedupe_key)
+  where dedupe_key is not null
+  do nothing;
+end;
+$$;
+
+revoke all on function public.notify_task_monitor(
+  uuid,
+  text,
+  text,
+  text,
+  text,
+  uuid,
+  text
+) from public;
 
 -- ############################################################################
 -- BLOCK 2 - a new comment reaches the monitor
@@ -104,27 +148,39 @@ security definer
 set search_path = public
 as $$
 begin
-  perform public.notify_task_monitor(new.task_id, 'comment', 'task_commented', 'Task Update', 'commented on', new.user_id, 'mon:comment:' || new.id::text);
+  perform public.notify_task_monitor(
+    new.task_id,
+    'comment',
+    'task_commented',
+    'Task Update',
+    'commented on',
+    new.user_id,
+    'mon:comment:' || new.id::text
+  );
+
   return new;
 end;
 $$;
 
 drop trigger if exists comments_notify_monitor on public.task_comments;
+
 create trigger comments_notify_monitor
   after insert on public.task_comments
-  for each row execute function public.tg_comments_notify_monitor();
+  for each row
+  execute function public.tg_comments_notify_monitor();
 
 
 -- ############################################################################
--- BLOCK 3 - the task lifecycle: status, delegation/reassignment, due date
+-- BLOCK 3 - the task lifecycle
 --
--- Runs ALONGSIDE 0010's triggers (it does not replace them), so history and
+-- Covers status change, delegation/reassignment and due date change. Runs
+-- ALONGSIDE 0010's triggers (it does not replace them), so history writing and
 -- the existing assignee/assigner notifications are untouched.
 --
 -- updated_at is stamped by 0010's BEFORE trigger, so it already holds the new
 -- value here and is unique per update transaction. That is what lets a task
 -- cycle in_progress -> waiting -> in_progress and notify each time, while a
--- duplicated statement still collapses to a single row.
+-- repeated statement still collapses to a single row.
 -- ############################################################################
 create or replace function public.tg_tasks_notify_monitor()
 returns trigger
@@ -134,15 +190,42 @@ set search_path = public
 as $$
 begin
   if new.status is distinct from old.status then
-    perform public.notify_task_monitor(new.id, 'status', 'task_status', 'Task Update', 'changed the status of', auth.uid(), 'mon:status:' || new.id::text || ':' || new.updated_at::text);
+    perform public.notify_task_monitor(
+      new.id,
+      'status',
+      'task_status',
+      'Task Update',
+      'changed the status of',
+      auth.uid(),
+      'mon:status:' || new.id::text
+        || ':' || new.updated_at::text
+    );
   end if;
 
   if new.assigned_to is distinct from old.assigned_to then
-    perform public.notify_task_monitor(new.id, 'reassigned', 'task_reassigned', 'Task Delegated', 'reassigned', auth.uid(), 'mon:reassigned:' || new.id::text || ':' || new.updated_at::text);
+    perform public.notify_task_monitor(
+      new.id,
+      'reassigned',
+      'task_reassigned',
+      'Task Delegated',
+      'reassigned',
+      auth.uid(),
+      'mon:reassigned:' || new.id::text
+        || ':' || new.updated_at::text
+    );
   end if;
 
   if new.due_date is distinct from old.due_date then
-    perform public.notify_task_monitor(new.id, 'due', 'task_due_changed', 'Task Update', 'changed the due date of', auth.uid(), 'mon:due:' || new.id::text || ':' || new.updated_at::text);
+    perform public.notify_task_monitor(
+      new.id,
+      'due',
+      'task_due_changed',
+      'Task Update',
+      'changed the due date of',
+      auth.uid(),
+      'mon:due:' || new.id::text
+        || ':' || new.updated_at::text
+    );
   end if;
 
   return null;
@@ -150,9 +233,11 @@ end;
 $$;
 
 drop trigger if exists tasks_notify_monitor on public.tasks;
+
 create trigger tasks_notify_monitor
   after update on public.tasks
-  for each row execute function public.tg_tasks_notify_monitor();
+  for each row
+  execute function public.tg_tasks_notify_monitor();
 
 
 -- ############################################################################
@@ -167,12 +252,19 @@ create or replace function public.tg_tasks_notify_monitor_insert()
 returns trigger
 language plpgsql
 security definer
+set search_path = public
+as $$
+begin
+  perform public.notify_task_monitor(
+    new.id,
+    'assigned',
+    'task_assigned',
 
 -- ############################################################################
--- BLOCK 5 - extensions reach BOTH the upline (0014, untouched) and the monitor
+-- BLOCK 5 - extensions reach BOTH the upline and the monitor
 --
--- 0014 notifies the requester's manager/director. A director who assigned the
--- task also needs to know their own deadline slipped.
+-- 0014 (untouched) notifies the requester's manager/director. A director who
+-- assigned the task also needs to know their own deadline slipped.
 -- ############################################################################
 create or replace function public.tg_extensions_notify_monitor()
 returns trigger
@@ -191,7 +283,10 @@ begin
     v_title := 'Extension Requested';
     v_verb := 'requested more time on';
     v_actor := new.requested_by;
-  elsif new.status is distinct from old.status and new.status <> 'pending' then
+
+  elsif new.status is distinct from old.status
+        and new.status <> 'pending' then
+
     if new.status = 'approved' then
       v_event := 'extension_approved';
       v_title := 'Extension Approved';
@@ -201,20 +296,33 @@ begin
       v_title := 'Extension Rejected';
       v_verb := 'rejected a request for more time on';
     end if;
+
     v_actor := coalesce(new.reviewed_by, auth.uid());
+
   else
     return new;
   end if;
 
-  perform public.notify_task_monitor(new.task_id, v_event, v_event, v_title, v_verb, v_actor, 'mon:' || v_event || ':' || new.id::text);
+  perform public.notify_task_monitor(
+    new.task_id,
+    v_event,
+    v_event,
+    v_title,
+    v_verb,
+    v_actor,
+    'mon:' || v_event || ':' || new.id::text
+  );
+
   return new;
 end;
 $$;
 
 drop trigger if exists extensions_notify_monitor on public.task_extensions;
+
 create trigger extensions_notify_monitor
   after insert or update on public.task_extensions
-  for each row execute function public.tg_extensions_notify_monitor();
+  for each row
+  execute function public.tg_extensions_notify_monitor();
 
 
 -- ############################################################################
@@ -233,10 +341,12 @@ create trigger extensions_notify_monitor
 -- HONEST LIMIT: this guarantees the monitoring SCREEN has no write path. It
 -- cannot revoke the write that tasks_update already grants a director, because
 -- the app legitimately needs that elsewhere. Closing that last gap means moving
--- every task write behind its own RPC - a separate, riskier change, deliberately
--- not bundled here.
+-- every task write behind its own RPC. That is a separate, riskier
+-- change, deliberately not bundled here.
 -- ############################################################################
-create or replace function public.task_monitoring_snapshot(p_task_id uuid)
+create or replace function public.task_monitoring_snapshot(
+  p_task_id uuid
+)
 returns jsonb
 language sql
 stable
@@ -256,37 +366,60 @@ as $$
       )
   )
   select jsonb_build_object(
-    'task', (select to_jsonb(p) from permitted p),
-    'history', coalesce((select jsonb_agg(to_jsonb(h) order by h.created_at desc) from public.task_history h join permitted p on p.id = h.task_id), '[]'::jsonb),
-    'comments', coalesce((select jsonb_agg(to_jsonb(c) order by c.created_at asc) from public.task_comments c join permitted p on p.id = c.task_id), '[]'::jsonb)
+    'task', (
+      select to_jsonb(p) from permitted p
+    ),
+    'history', coalesce(
+      (
+        select jsonb_agg(to_jsonb(h) order by h.created_at desc)
+        from public.task_history h
+        join permitted p on p.id = h.task_id
+      ),
+      '[]'::jsonb
+    ),
+    'comments', coalesce(
+      (
+        select jsonb_agg(to_jsonb(c) order by c.created_at asc)
+        from public.task_comments c
+        join permitted p on p.id = c.task_id
+      ),
+      '[]'::jsonb
+    )
   )
   from permitted
   limit 1;
 $$;
 
-revoke all on function public.task_monitoring_snapshot(uuid) from public;
-grant execute on function public.task_monitoring_snapshot(uuid) to authenticated;
+revoke all on function public.task_monitoring_snapshot(uuid)
+  from public;
 
-comment on function public.task_monitoring_snapshot(uuid) is
-  'Authorised read-only snapshot (task + history + comments) for Director/Super Admin monitoring. Returns NULL when the caller may not see the task.';
+grant execute on function public.task_monitoring_snapshot(uuid)
+  to authenticated;
 
-set search_path = public
-as $$
-begin
-  perform public.notify_task_monitor(new.id, 'assigned', 'task_assigned', 'Task Assigned', 'assigned', coalesce(new.assigned_by, new.created_by), 'mon:assigned:' || new.id::text);
+    'Task Assigned',
+    'assigned',
+    coalesce(new.assigned_by, new.created_by),
+    'mon:assigned:' || new.id::text
+  );
+
   return new;
 end;
 $$;
 
 drop trigger if exists tasks_notify_monitor_insert on public.tasks;
+
 create trigger tasks_notify_monitor_insert
   after insert on public.tasks
-  for each row execute function public.tg_tasks_notify_monitor_insert();
+  for each row
+  execute function public.tg_tasks_notify_monitor_insert();
 
-  )
-  on conflict (dedupe_key) where dedupe_key is not null do nothing;
-end;
-$$;
 
-revoke all on function public.notify_task_monitor(uuid, text, text, text, text, uuid, text) from public;
-grant execute on function public.notify_task_monitor(uuid, text, text, text, text, uuid, text) to authenticated;
+grant execute on function public.notify_task_monitor(
+  uuid,
+  text,
+  text,
+  text,
+  text,
+  uuid,
+  text
+) to authenticated;
