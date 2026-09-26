@@ -1,14 +1,19 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
+  Keyboard,
+  KeyboardEvent,
   Modal,
   Platform,
+  Pressable,
+  ScrollView,
   StyleProp,
   StyleSheet,
   Text,
   TextInput,
   View,
   ViewStyle,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../src/constants/app';
@@ -43,6 +48,43 @@ export type PickerEmployee = {
   department?: string | null;
 };
 
+/**
+ * Live keyboard height.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * The manifest sets windowSoftInputMode="adjustResize", so opening the search
+ * keyboard shrinks the window. Inside a Modal on Android that resize does NOT
+ * reach the sheet reliably, so the bottom sheet stayed anchored to the old
+ * bottom edge and the keyboard drew straight over the search box and the first
+ * few results - "the picker gets small and hides behind the keypad".
+ *
+ * Measuring the keyboard ourselves is the only reliable cross-version fix: the
+ * sheet is then positioned inside the space that is actually visible, instead
+ * of trusting the Modal to resize for us.
+ */
+function useKeyboardHeight(): number {
+  const [height, setHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const onShow = (e: KeyboardEvent) => setHeight(e.endCoordinates?.height ?? 0);
+    const onHide = () => setHeight(0);
+
+    const showSub = Keyboard.addListener(showEvent as any, onShow);
+    const hideSub = Keyboard.addListener(hideEvent as any, onHide);
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  return height;
+}
+
 export function EmployeePicker({
   employees,
   value,
@@ -66,6 +108,16 @@ export function EmployeePicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const listRef = useRef<FlatList<PickerEmployee>>(null);
+
+  const keyboardHeight = useKeyboardHeight();
+  const { height: windowHeight } = useWindowDimensions();
+
+  // Height budget for the sheet. While the keyboard is up we must fit the
+  // header + search + at least a few rows into what is LEFT, otherwise the
+  // list collapses to nothing and the sheet looks broken.
+  const visibleHeight = Math.max(windowHeight - keyboardHeight, 240);
+  const sheetHeight = Math.min(visibleHeight * 0.78, visibleHeight - 24);
 
   const selected = useMemo(
     () => employees.find((e) => e.id === value) ?? null,
@@ -87,6 +139,7 @@ export function EmployeePicker({
   function close() {
     setOpen(false);
     setQuery('');
+    Keyboard.dismiss();
   }
 
   function choose(id: string) {
@@ -140,9 +193,13 @@ export function EmployeePicker({
       >
         <View style={styles.backdrop}>
           {/* Tap-outside-to-close target, sitting behind the sheet. */}
-          <AppPress style={styles.backdropTap} onPress={close} />
+          <Pressable style={styles.backdropTap} onPress={close} />
 
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, { height: sheetHeight }]}>
+            {/* Drag handle: signals the sheet can be swiped down to dismiss. */}
+            <Pressable style={styles.grabberArea} onPress={close}>
+              <View style={styles.grabber} />
+            </Pressable>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>Select employee</Text>
 
@@ -176,14 +233,33 @@ export function EmployeePicker({
             </View>
 
             <FlatList
+              ref={listRef}
               data={results}
               keyExtractor={(item) => item.id}
               style={styles.list}
+              contentContainerStyle={styles.listContent}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               initialNumToRender={12}
               maxToRenderPerBatch={12}
               windowSize={7}
+              // Start each new search at the top of the results.
+              onContentSizeChange={() => listRef.current?.scrollToOffset({ offset: 0, animated: false })}
+              keyboardDismissMode="on-drag"
+              ListEmptyComponent={
+                <View style={styles.emptyWrap}>
+                  <Ionicons
+                    name={query.trim() ? 'search-outline' : 'people-outline'}
+                    size={26}
+                    color={COLORS.textFaint}
+                  />
+                  <Text style={styles.empty}>
+                    {query.trim()
+                      ? `No employee matches "${query.trim()}".`
+                      : emptyMessage}
+                  </Text>
+                </View>
+              }
               renderItem={({ item }) => {
                 const isSelected = item.id === value;
 
@@ -222,13 +298,6 @@ export function EmployeePicker({
                   </AppPress>
                 );
               }}
-              ListEmptyComponent={
-                <Text style={styles.empty}>
-                  {query.trim()
-                    ? `No employee matches "${query.trim()}".`
-                    : emptyMessage}
-                </Text>
-              }
             />
           </View>
         </View>
@@ -263,13 +332,28 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   backdropTap: { flex: 1 },
+
+  grabberArea: {
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 2,
+  },
+  grabber: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#D3D9DE',
+  },
+
+  // Height is supplied at runtime (see sheetHeight). An explicit height - not
+  // maxHeight - is what keeps the layout stable: the sheet cannot collapse when
+  // the keyboard opens, and the list below it absorbs the space instead.
   sheet: {
     backgroundColor: COLORS.card,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    // Fixed ceiling: the sheet can never grow with the employee count.
-    maxHeight: '75%',
-    paddingBottom: Platform.OS === 'ios' ? 26 : 14,
+    paddingBottom: 8,
+    overflow: 'hidden',
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -304,10 +388,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 
-  // flexShrink rather than a fixed height: the list takes only the room it
-  // needs and scrolls internally. This is the containment maxHeight-on-a-View
-  // could never provide.
-  list: { flexShrink: 1 },
+  // The list is the ONLY flexible part of the sheet. The header, search box and
+  // grabber keep their height, so opening the keyboard shrinks the results area
+  // instead of pushing the search box under the keypad.
+  list: { flex: 1 },
+  listContent: { flexGrow: 1 },
 
   row: {
     flexDirection: 'row',
@@ -342,8 +427,14 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 2,
   },
-  empty: {
+  emptyWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
     padding: 26,
+  },
+  empty: {
+    marginTop: 10,
     textAlign: 'center',
     color: COLORS.textSoft,
     fontSize: 12,

@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../../lib/supabase';
 import { getSessionProfile } from '../../lib/auth';
+import { EmployeePicker } from '../../lib/EmployeePicker';
 import { COLORS } from '../constants/app';
 
 type Recurring = {
@@ -63,7 +64,7 @@ export default function RecurringScreen() {
       // People this user may assign to (RLS already scopes profiles).
       const { data: people } = await supabase
         .from('profiles')
-        .select('id, full_name, employee_id, department')
+        .select('id, full_name, employee_id, department, role')
         .eq('is_active', true)
         .neq('id', me.id)
         .order('full_name', { ascending: true });
@@ -242,25 +243,16 @@ export default function RecurringScreen() {
             )}
 
             <Text style={styles.label}>ASSIGN TO</Text>
-            <ScrollView style={styles.pickerList} nestedScrollEnabled>
-              {assignees.length === 0 ? (
-                <Text style={styles.emptyText}>No assignees available.</Text>
-              ) : (
-                assignees.map((a) => (
-                  <TouchableOpacity
-                    key={a.id}
-                    style={styles.pickerRow}
-                    onPress={() => setAssignee(a.id)}
-                  >
-                    <Text style={styles.pickerName}>{a.full_name}</Text>
-                    <Text style={styles.pickerMeta}>{a.employee_id}</Text>
-                    {assignee === a.id && (
-                      <Ionicons name="checkmark-circle" size={20} color={COLORS.orange} />
-                    )}
-                  </TouchableOpacity>
-                ))
-              )}
-            </ScrollView>
+            {/* Searchable dropdown. This was a hand-rolled 160px ScrollView with
+                no search field, so a large company meant blind-scrolling a list
+                that only showed name + employee id. */}
+            <EmployeePicker
+              employees={assignees}
+              value={assignee}
+              onChange={setAssignee}
+              emptyMessage="No assignees available."
+              style={styles.input}
+            />
 
             <TouchableOpacity
               style={[styles.saveButton, saving && styles.disabled]}
@@ -353,13 +345,6 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
   chipText: { color: '#687382', fontSize: 10, fontWeight: '900' },
   chipTextActive: { color: '#FFFFFF' },
-  pickerList: { maxHeight: 160 },
-  pickerRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#F0F2F4',
-  },
-  pickerName: { flex: 1, color: COLORS.navy, fontSize: 13, fontWeight: '700' },
-  pickerMeta: { color: COLORS.textFaint, fontSize: 10 },
   saveButton: {
     height: 52, borderRadius: 10, backgroundColor: COLORS.navy,
     alignItems: 'center', justifyContent: 'center', marginTop: 20,
