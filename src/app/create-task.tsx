@@ -15,6 +15,7 @@ import { goBack } from '../../lib/navigation';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../../lib/supabase';
 import { getMyId, getSessionProfile } from '../../lib/auth';
+import { EmployeePicker } from '../../lib/EmployeePicker';
 import { AppPress } from '../../lib/ui';
 
 export default function CreateTaskScreen() {
@@ -35,7 +36,6 @@ export default function CreateTaskScreen() {
   const [assignees, setAssignees] = useState<any[]>([]);
   const [currentProfile, setCurrentProfile] = useState<any>(null);
   const [loadingAssignees, setLoadingAssignees] = useState(true);
-  const [showAssigneeList, setShowAssigneeList] = useState(false);
 
   async function loadAssignees() {
   setLoadingAssignees(true);
@@ -315,100 +315,16 @@ export default function CreateTaskScreen() {
                 {/* ASSIGN TO */}
         <Text style={styles.label}>ASSIGN TO</Text>
 
-        <AppPress
+        <EmployeePicker
+          employees={assignees}
+          value={selectedAssignee}
+          onChange={setSelectedAssignee}
+          loading={loadingAssignees}
+          emptyMessage="No employees available for assignment."
           style={styles.inputWithIcon}
-          onPress={() =>
-            setShowAssigneeList(!showAssigneeList)
-          }
-        >
-          <Ionicons
-            name="person-outline"
-            size={20}
-            color="#7C8795"
-          />
+        />
 
-          <Text
-            style={[
-              styles.dateInput,
-              {
-                color: selectedAssignee
-                  ? '#182337'
-                  : '#9BA4AF',
-              },
-            ]}
-          >
-            {selectedAssignee
-              ? assignees.find(
-                  (person) =>
-                    person.id === selectedAssignee
-                )?.full_name
-              : 'Select employee'}
-          </Text>
-
-          <Ionicons
-            name={
-              showAssigneeList
-                ? 'chevron-up'
-                : 'chevron-down'
-            }
-            size={18}
-            color="#7C8795"
-          />
-        </AppPress>
-
-        {showAssigneeList && (
-          <View style={styles.assigneeList}>
-            {loadingAssignees ? (
-              <Text style={styles.assigneeMessage}>
-                Loading employees...
-              </Text>
-            ) : assignees.length === 0 ? (
-              <Text style={styles.assigneeMessage}>
-                No employees available for assignment.
-              </Text>
-            ) : (
-              assignees.map((person) => (
-                <AppPress
-                  key={person.id}
-                  style={styles.assigneeItem}
-                  onPress={() => {
-                    setSelectedAssignee(person.id);
-                    setShowAssigneeList(false);
-                  }}
-                >
-                  <View style={styles.assigneeAvatar}>
-                    <Text style={styles.assigneeAvatarText}>
-                      {person.full_name
-                        ?.charAt(0)
-                        ?.toUpperCase()}
-                    </Text>
-                  </View>
-
-                  <View style={styles.assigneeInfo}>
-                    <Text style={styles.assigneeName}>
-                      {person.full_name}
-                    </Text>
-
-                    <Text style={styles.assigneeMeta}>
-                      {person.employee_id}
-                      {person.department
-                        ? ` • ${person.department}`
-                        : ''}
-                    </Text>
-                  </View>
-
-                  {selectedAssignee === person.id && (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={21}
-                      color="#E87516"
-                    />
-                  )}
-                </AppPress>
-              ))
-            )}
-          </View>
-        )}
+        {/* DUE DATE */}
 
 
 {/* DUE DATE */}
@@ -664,65 +580,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 14,
-  },
-
-    assigneeList: {
-    marginHorizontal: 20,
-    marginTop: 6,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#DCE1E6',
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
-
-  assigneeItem: {
-    minHeight: 60,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EDF0F2',
-  },
-
-  assigneeAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#12233F',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 11,
-  },
-
-  assigneeAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '900',
-  },
-
-  assigneeInfo: {
-    flex: 1,
-  },
-
-  assigneeName: {
-    color: '#182337',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-
-  assigneeMeta: {
-    color: '#7C8795',
-    fontSize: 10,
-    marginTop: 3,
-  },
-
-  assigneeMessage: {
-    color: '#7C8795',
-    fontSize: 11,
-    textAlign: 'center',
-    paddingVertical: 18,
-    paddingHorizontal: 12,
   },
 
   dateInput: {

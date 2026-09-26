@@ -1,10 +1,14 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  FlatList,
+  Modal,
+  Platform,
   Pressable,
   StyleProp,
   StyleSheet,
   Text,
+  TextInput,
   View,
   ViewStyle,
 } from 'react-native';
@@ -33,16 +37,21 @@ export function AppPress({
   onPress,
   style,
   disabled,
+  hitSlop,
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   onPress?: () => void;
   style?: StyleProp<ViewStyle>;
   disabled?: boolean;
+  // Generous invisible tap area around small icon-only targets, so a control
+  // does not have to be visually large to be easy to hit.
+  hitSlop?: number | { top?: number; bottom?: number; left?: number; right?: number };
 }) {
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      hitSlop={hitSlop}
       android_ripple={{ color: 'rgba(18,35,63,0.08)', borderless: false }}
       style={({ pressed }) => [
         { opacity: pressed && !disabled ? 0.86 : 1 },

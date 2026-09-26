@@ -378,7 +378,16 @@ export default function ManageUsersScreen() {
             />
 
             <Text style={styles.label}>REPORTS TO (UPLINE)</Text>
-            <View style={styles.managerList}>
+            {/* SCROLLABLE, and height-capped. This was a plain View with only
+                `maxHeight`, which does NOT clip in React Native - past the cap
+                the rows kept rendering outside the box and painted straight
+                over the SAVE button below. A list is only contained when it
+                actually scrolls. */}
+            <ScrollView
+              style={styles.managerList}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+            >
               <TouchableOpacity
                 style={styles.managerRow}
                 onPress={() => setEditManagerId('')}
@@ -404,7 +413,7 @@ export default function ManageUsersScreen() {
                     )}
                   </TouchableOpacity>
                 ))}
-            </View>
+            </ScrollView>
 
             <TouchableOpacity
               style={[styles.saveButton, editSaving && styles.disabled]}
@@ -490,7 +499,11 @@ export default function ManageUsersScreen() {
             {managers.length === 0 ? (
               <Text style={styles.emptyText}>No managers/heads available yet.</Text>
             ) : (
-              <View style={styles.managerList}>
+              <ScrollView
+                style={styles.managerList}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={false}
+              >
                 {managers.map((m) => (
                   <TouchableOpacity
                     key={m.id}
@@ -504,7 +517,7 @@ export default function ManageUsersScreen() {
                     )}
                   </TouchableOpacity>
                 ))}
-              </View>
+              </ScrollView>
             )}
 
             <TouchableOpacity
@@ -551,7 +564,9 @@ const styles = StyleSheet.create({
   },
   deniedTitle: { color: COLORS.navy, fontSize: 17, fontWeight: '900', marginTop: 14 },
   deniedText: { color: COLORS.textSoft, fontSize: 12, textAlign: 'center', marginTop: 8 },
-  content: { padding: 16, paddingBottom: 40 },
+  // Generous bottom padding so the last card always clears the screen edge and
+  // any bar pinned to the bottom - a short list must never sit under it.
+  content: { padding: 16, paddingBottom: 56 },
   card: {
     backgroundColor: COLORS.card, borderRadius: 14, padding: 13,
     borderWidth: 1, borderColor: COLORS.border, marginBottom: 10,
@@ -609,10 +624,20 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
   chipText: { color: '#687382', fontSize: 10, fontWeight: '800' },
   chipTextActive: { color: '#FFFFFF', fontWeight: '900' },
-  managerList: { maxHeight: 170 },
+  // Height-capped AND scrollable. The cap alone is what used to fail: RN does
+  // not clip on maxHeight, so rows rendered outside this box and covered the
+  // button below. ScrollView is what actually contains them.
+  managerList: {
+    maxHeight: 180,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    backgroundColor: '#FCFDFE',
+  },
   managerRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F2F4',
+    paddingVertical: 10, paddingHorizontal: 12,
+    borderBottomWidth: 1, borderBottomColor: '#F0F2F4',
   },
   managerName: { flex: 1, color: COLORS.navy, fontSize: 13, fontWeight: '700' },
   managerRole: { color: COLORS.textFaint, fontSize: 10 },
