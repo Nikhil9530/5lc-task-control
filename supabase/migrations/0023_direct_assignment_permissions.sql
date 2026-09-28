@@ -666,6 +666,6 @@ grant execute on function public.dashboard_counts(date) to authenticated;
 --      still hierarchy-based. They belong to the UI phase.
 --
 -- VERIFY BEFORE TOUCHING THE UI
---   Run supabase/diagnostics/verify_direct_assignment.sql and read the
---   results. It is read-only and changes nothing.
+--   Run supabase/diagnostics/verify_permissions_rowset.sql and read the
+--   results. It is read-only (apart from a small test harness it drops again).
 -- ============================================================================
