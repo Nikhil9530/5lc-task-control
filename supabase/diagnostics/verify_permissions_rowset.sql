@@ -152,8 +152,14 @@ begin
 end;
 $$;
 
-revoke all on function public.diag_can_assign(uuid, uuid) from public;
-grant execute on function public.diag_can_assign(uuid, uuid) to authenticated;
+-- OWNER-ONLY ON PURPOSE - do NOT grant these to anon/authenticated.
+-- These harness functions impersonate a user by rewriting
+-- request.jwt.claims, so they must never be callable by the app. Leaving
+-- EXECUTE to `authenticated` would also publish them on the PostgREST RPC
+-- endpoint. The SQL editor runs as the owner, and an owner can always
+-- execute its own function, so no grant is needed for these to work.
+revoke all on function public.diag_can_assign(uuid, uuid)
+  from public, anon, authenticated;
 
 
 -- ============================================================================
@@ -335,8 +341,12 @@ begin
 end;
 $$;
 
-revoke all on function public.diag_visible(uuid, uuid) from public;
-grant execute on function public.diag_visible(uuid, uuid) to authenticated;
+-- OWNER-ONLY ON PURPOSE - see the note on BLOCK B. This one is the more
+-- sensitive of the two: it counts rows as another user, so EXECUTE for
+-- `authenticated` would let any signed-in user probe what somebody else can
+-- see.
+revoke all on function public.diag_visible(uuid, uuid)
+  from public, anon, authenticated;
 
 -- ============================================================================
 -- BLOCK C2  -  PRIVACY PROBE  (5 rows)
@@ -465,11 +475,24 @@ order by ord;
 
 
 -- ============================================================================
--- BLOCK Z  -  REMOVE THE TEST HARNESS
+-- BLOCK Z  -  REMOVE THE TEST HARNESS  (run this LAST)
 --
--- Optional, but tidy. Run it after you have read the results of B2, B3 and C2.
--- Re-running blocks B and C recreates the harness if you need it again.
+-- NOT optional tidiness - this is a security cleanup. The harness functions
+-- impersonate a user, so they must not be left behind in a live database.
+--
+-- Run it only after you have read the results of B2, B3 and C2. Re-running
+-- BLOCK B or BLOCK C recreates the harness if you need it again.
 -- ============================================================================
 
 drop function if exists public.diag_can_assign(uuid, uuid);
 drop function if exists public.diag_visible(uuid, uuid);
+
+
+-- Confirm they are gone. Expect ZERO rows.
+select
+  p.proname
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname in ('diag_can_assign', 'diag_visible')
+order by p.proname;
