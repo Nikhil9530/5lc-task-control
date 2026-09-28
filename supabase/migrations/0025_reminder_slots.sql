@@ -340,15 +340,18 @@ $$;
 --
 -- Expect FIVE rows. Anything missing means that reminder path is dead:
 --
---   lc-afternoon-reminders   30 10 * * *   16:00 IST  NEW
---   lc-daily-task-checks     30 3  * * *   09:00 IST  (0009)
---   lc-prune-notifications   15 2  * * *   07:45 IST  (0021)
---   lc-recurring-tasks       35 18 * * *   00:05 IST  (0009)
---   dispatch-notifications   */5 * * * *   every 5min  DEPLOYMENT.md STEP 5
+--   lc-afternoon-reminders       30 10 * * *   16:00 IST  NEW
+--   lc-daily-task-checks         30 3  * * *   09:00 IST  (0009)
+--   lc-prune-notifications       15 2  * * *   07:45 IST  (0021)
+--   lc-recurring-tasks           35 18 * * *   00:05 IST  (0009)
+--   lc-dispatch-notifications    */5 * * * *   every 5min DELIVERY
 --
--- The last one is NOT created by any migration - it is a manual step. If it
+-- The LAST one is created by DEPLOYMENT.md STEP 5, not by any migration -
+-- no migration can schedule it because it needs your DISPATCH_SECRET. If it
 -- is absent, notification ROWS are created but no push or email ever leaves
 -- the server, while the in-app inbox still works (it reads rows directly).
+-- The query below matches both this name and the bare
+-- `dispatch-notifications` name used in DEPLOYMENT.md.
 -- ============================================================================
 
 select
@@ -357,7 +360,7 @@ select
   active
 from cron.job
 where jobname like 'lc-%'
-   or jobname = 'dispatch-notifications'
+   or jobname like '%dispatch%'
 order by jobname;
 
 
@@ -365,9 +368,10 @@ order by jobname;
 -- END OF 0025
 --
 -- WHAT THIS MIGRATION DID NOT DO
---   1. It does not schedule `dispatch-notifications` - that requires your
---      DISPATCH_SECRET, so it stays a manual step (DEPLOYMENT.md STEP 5).
---      Run BLOCK 4b first to see whether you already have it.
+--   1. It does not schedule the dispatcher - that needs your DISPATCH_SECRET,
+--      so no migration can create it. It is installed as
+--      `lc-dispatch-notifications` via DEPLOYMENT.md STEP 5, and BLOCK 4b
+--      confirms it is present and active.
 --   2. rejected / waiting tasks still produce reminders - unchanged, as
 --      instructed.
 --   3. escalation_targets() still walks manager_id for the ESCALATION

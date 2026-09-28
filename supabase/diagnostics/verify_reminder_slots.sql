@@ -63,8 +63,11 @@ order by p.proname;
 -- BLOCK C  -  THE SCHEDULE
 --
 -- Expect 5 rows. See the table in 0025 BLOCK 4b for the expected output.
--- A missing `dispatch-notifications` row means notification ROWS are created
--- but no push/email is ever delivered - while the in-app inbox still works.
+--
+-- The dispatcher is installed as `lc-dispatch-notifications`. If no row with
+-- "dispatch" in the name appears, notification ROWS are created but no
+-- push/email is ever delivered - while the in-app inbox still works, because
+-- it reads rows directly.
 -- ============================================================================
 
 select
@@ -73,7 +76,7 @@ select
   active
 from cron.job
 where jobname like 'lc-%'
-   or jobname = 'dispatch-notifications'
+   or jobname like '%dispatch%'
 order by jobname;
 
 
