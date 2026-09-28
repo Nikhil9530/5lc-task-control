@@ -8,11 +8,10 @@
 -- because hiding buttons in React Native is not security.
 --
 -- WHAT CHANGES
---   1. can_assign_to()  -> anyone may assign to anyone, EXCEPT that a
---                          Director may only be targeted by a Director /
---                          Super Admin, and a Super Admin may only be
---                          targeted by themselves. Self-assignment is
---                          always allowed.
+--   1. can_assign_to()  -> anyone may assign to anyone, EXCEPT that an
+--                          elevated target (Director or Super Admin) may
+--                          only be targeted by a Director / Super Admin.
+--                          Self-assignment is always allowed for every role.
 --   2. Personal tasks   -> a task assigned to the person who assigned it
 --                          is PRIVATE to that person. Nobody else sees it,
 --                          including other Directors and Super Admins.
@@ -92,16 +91,25 @@ revoke all on function public.is_personal_assignment(
 grant execute on function public.is_personal_assignment(
   uuid, uuid, uuid) to authenticated;
 
--- FINAL assignment rules. Every case below comes from the confirmed list:
---   Director 1 -> Director 2   allowed
---   Employee   -> Employee     allowed
---   Employee   -> Manager      allowed
---   Manager    -> Head         allowed
---   Employee   -> Director     BLOCKED
---   Manager    -> Director     BLOCKED
---   Director   -> Super Admin  BLOCKED
---   Anyone     -> Super Admin  BLOCKED
---   Anyone     -> themselves   allowed (this is a personal task)
+-- FINAL assignment rules. REVISED AFTER THE FIRST APPLY: Super Admin used to be
+-- blocked as a target for everyone; a Director or Super Admin may now target a
+-- Director or a Super Admin. Re-run this block to update the function - it is a
+-- create-or-replace, and nothing else in 0023 is affected.
+--
+-- Every case below is from the confirmed list:
+--   Director 1  -> Director 2   allowed
+--   Director    -> Super Admin  allowed
+--   Super Admin -> Super Admin  allowed
+--   Employee    -> Employee     allowed
+--   Employee    -> Manager      allowed
+--   Manager     -> Head         allowed
+--   Employee    -> Director     BLOCKED
+--   Manager     -> Director     BLOCKED
+--   Head        -> Director     BLOCKED
+--   Employee    -> Super Admin  BLOCKED
+--   Manager     -> Super Admin  BLOCKED
+--   Head        -> Super Admin  BLOCKED
+--   Anyone      -> themselves   allowed (this is a personal task)
 create or replace function public.can_assign_to(target uuid)
 returns boolean
 language sql
@@ -119,16 +127,14 @@ as $$
     --    personal task possible, so it must be checked before the role gates.
     when target = auth.uid() then true
 
-    -- 3. A Super Admin is never the target of a normal assignment.
+    -- 3. An ELEVATED target - a Director or a Super Admin - may only be
+    --    targeted by a Director or a Super Admin. (Revised after the first
+    --    apply: Super Admin used to be blocked for everyone.)
     when (select p.role from public.profiles p
-           where p.id = target) = 'super_admin' then false
-
-    -- 4. A Director may only be targeted by a Director / Super Admin.
-    when (select p.role from public.profiles p
-           where p.id = target) = 'director'
+           where p.id = target) in ('director', 'super_admin')
       then public.current_role() in ('director', 'super_admin')
 
-    -- 5. Everyone else: any signed-in user may assign to them.
+    -- 4. Everyone else: any signed-in user may assign to them.
     --    (current_role() is '' when the caller has no profile - fail closed.)
     else public.current_role() <> ''
   end;
@@ -136,8 +142,8 @@ $$;
 
 comment on function public.can_assign_to(uuid) is
   'Direct-assignment rules: anyone may assign to anyone, except that a '
-  'Director requires a Director/Super Admin, and a Super Admin may only '
-  'be assigned to by themselves.';
+  'Director or Super Admin may only be targeted by a Director or a '
+  'Super Admin. Self-assignment is allowed for every role.';
 
 revoke all on function public.can_assign_to(uuid) from public;
 grant execute on function public.can_assign_to(uuid) to authenticated;

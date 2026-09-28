@@ -154,8 +154,11 @@ grant execute on function public.diag_can_assign(uuid, uuid) to authenticated;
 --   employee             Y       Y       Y       N          N
 --   manager              Y       Y       Y       N          N
 --   head                 Y       Y       Y       N          N
---   director             Y       Y       Y       Y          N
---   super_admin          Y       Y       Y       Y          N
+--   director             Y       Y       Y       Y          Y
+--   super_admin          Y       Y       Y       Y          Y
+--
+-- An ELEVATED target (Director or Super Admin) may only be targeted by a
+-- Director or a Super Admin. Everyone else is open to any signed-in user.
 --
 -- '-' means no profile with that role exists yet.
 -- The 'verdict' column tells you immediately whether each cell is right.
@@ -212,12 +215,12 @@ expected(actor, target, want) as (
     ('director',    'manager',     true),
     ('director',    'head',        true),
     ('director',    'director',    true),
-    ('director',    'super_admin', false),
+    ('director',    'super_admin', true),
     ('super_admin', 'employee',    true),
     ('super_admin', 'manager',     true),
     ('super_admin', 'head',        true),
     ('super_admin', 'director',    true),
-    ('super_admin', 'super_admin', false)
+    ('super_admin', 'super_admin', true)
 )
 select
   m.actor,
