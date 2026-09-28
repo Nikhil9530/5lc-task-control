@@ -13,7 +13,17 @@
 -- only write in this file, and Block Z removes it again afterwards. The
 -- harness functions themselves change no data.
 --
--- Run in order: A, A2, A3, B, B2, B3, C, C2.
+-- Run ONE BLOCK AT A TIME, in this order:
+--
+--   A, A2, A3   ->  policy inventory / drift check      (no harness needed)
+--   B           ->  creates diag_can_assign()           (harness)
+--   B2, B3      ->  use diag_can_assign()
+--   C           ->  creates diag_visible()              (harness)
+--   C2          ->  uses diag_visible()
+--   Z           ->  DROPS BOTH HARNESS FUNCTIONS
+--
+-- Run Z LAST. If you run it early, B2, B3 and C2 fail with
+-- "function public.diag_... does not exist" - re-run B or C to restore it.
 -- ============================================================================
 
 
@@ -330,6 +340,13 @@ grant execute on function public.diag_visible(uuid, uuid) to authenticated;
 
 -- ============================================================================
 -- BLOCK C2  -  PRIVACY PROBE  (5 rows)
+--
+-- REQUIRES BLOCK C. This calls public.diag_visible(), which BLOCK C creates.
+-- If you see:
+--     ERROR: function public.diag_visible(uuid, uuid) does not exist
+-- then BLOCK C has not been run in this session, or BLOCK Z has already
+-- dropped the harness. Run BLOCK C, then this block. Do NOT run BLOCK Z until
+-- after you have read these results.
 --
 -- EXPECTED
 --   1) DIRECTOR sees another user's PERSONAL task      -> visible 0
