@@ -10,6 +10,11 @@ import { supabase } from '../../lib/supabase';
 import { getSessionProfile } from '../../lib/auth';
 import { AppPress, Skeleton } from '../../lib/ui';
 import { COLORS, STATUS_LABELS, STATUS_COLORS, formatStatusLabel } from '../constants/app';
+import {
+  attributionRows,
+  withAttribution,
+  type PersonRef,
+} from '../../lib/taskAttribution';
 
 type Stat = { label: string; value: number; color: string };
 
@@ -19,12 +24,34 @@ type OverdueItem = {
   due_date: string;
   priority: string;
   status: string;
+  created_by: string | null;
+  assigned_by: string | null;
+  assigned_to: string | null;
+  creator: PersonRef | null;
+  assigner: PersonRef | null;
+  assignee: PersonRef | null;
+};
+
+// The card is one line, so the verbose label is abbreviated. An explicit map
+// rather than chained replaces: 'CREATED BY' and 'ASSIGNED BY' overlap enough
+// that a substring replace can silently rewrite the wrong one later.
+const SHORT_LABELS: Record<string, string> = {
+  'CREATED BY': 'By',
+  'ASSIGNED BY': 'From',
+  'ASSIGNED TO': 'To',
 };
 
 const OverdueRow = memo(function OverdueRow({ item }: { item: OverdueItem }) {
   const handlePress = useCallback(() => {
     nav({ pathname: '/task-detail', params: { id: item.id } });
   }, [item.id]);
+
+  // Reports is read as "who is behind this", so attribution gets its own line
+  // under the status. Populated lines only, so an unassigned legacy row does
+  // not print a dangling separator.
+  const attribution = attributionRows(item)
+    .map((r) => `${SHORT_LABELS[r.label] ?? r.label}: ${r.value}`)
+    .join('  \u2022  ');
 
   return (
     <AppPress
@@ -36,6 +63,11 @@ const OverdueRow = memo(function OverdueRow({ item }: { item: OverdueItem }) {
         <Text style={styles.overdueMeta}>
           Due {item.due_date}  -  {formatStatusLabel(item.status)}
         </Text>
+        {attribution.length > 0 && (
+          <Text style={styles.overdueAttribution} numberOfLines={1}>
+            {attribution}
+          </Text>
+        )}
       </View>
       <Ionicons name="chevron-forward" size={18} color={COLORS.textFaint} />
     </AppPress>
@@ -105,14 +137,26 @@ export default function ReportsScreen() {
         { label: STATUS_LABELS.rejected, value: count('rejected'), color: STATUS_COLORS.rejected },
       ]);
 
+      // Attribution rides along on the same row as the overdue facts, so the
+      // "Most Overdue" list can name people without a second request. The
+      // count query above is unchanged: it only needs status.
+      //
+      // Literal select, not a template: supabase-js types the result from the
+      // string, so an interpolated constant would make the row `any`-less.
+      // The `!<column>` hints are required because `tasks` has three foreign
+      // keys onto `profiles`; see lib/taskAttribution.ts.
       const { data: od } = await supabase
         .from('tasks')
-        .select('id, title, due_date, priority, status')
+        .select(
+          'id, title, due_date, priority, status, created_by, assigned_by, assigned_to, creator:profiles!created_by(id, full_name, employee_id), assigner:profiles!assigned_by(id, full_name, employee_id), assignee:profiles!assigned_to(id, full_name, employee_id)'
+        )
         .lt('due_date', today)
         .neq('status', 'completed')
         .order('due_date', { ascending: true })
         .limit(8);
-      setOverdueList(od ?? []);
+      // withAttribution narrows the three embedded profiles; see
+      // lib/taskAttribution.ts.
+      setOverdueList((od ?? []).map(withAttribution));
     } catch (e) {
       console.log('Reports load error:', e);
     } finally {
@@ -232,4 +276,10 @@ const styles = StyleSheet.create({
   },
   overdueTitle: { color: COLORS.navy, fontSize: 13, fontWeight: '800' },
   overdueMeta: { color: COLORS.red, fontSize: 10, marginTop: 3 },
+  overdueAttribution: {
+    color: COLORS.textSoft,
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 3,
+  },
 });

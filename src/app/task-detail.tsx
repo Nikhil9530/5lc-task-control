@@ -18,6 +18,11 @@ import { supabase } from '../../lib/supabase';
 import { getMyId, getSessionProfile } from '../../lib/auth';
 import { AppPress, Skeleton } from '../../lib/ui';
 import { COLORS, EXTENSION_REASONS, statusColor, allowedNextStatuses, type TaskActor } from '../constants/app';
+import {
+  attributionRows,
+  withAttribution,
+  type PersonRef,
+} from '../../lib/taskAttribution';
 
 type TaskStatus =
   | 'not_started'
@@ -41,6 +46,13 @@ type Task = {
   // the assignee reports progress, everyone above them reviews.
   assigned_to: string | null;
   assigned_by: string | null;
+  // The three uuids stay for the permission maths above. The names below are
+  // purely presentational and are NOT used for any access decision - the
+  // database decides that, not the client.
+  created_by: string | null;
+  creator: PersonRef | null;
+  assigner: PersonRef | null;
+  assignee: PersonRef | null;
 };
 
 type TaskHistory = {
@@ -254,33 +266,60 @@ async function addComment() {
       return;
     }
 
-    setTask((data.task as Task) ?? null);
-
     // The snapshot returns raw rows (an RPC has no PostgREST embedding), so
     // display names are hydrated here from the directory RLS already exposes.
     const rows = [
       ...((data.history ?? []) as any[]),
       ...((data.comments ?? []) as any[]),
     ];
-    const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))] as string[];
-    const names = new Map<string, string>();
+    const taskRow = (data.task as any) ?? null;
+
+    // One lookup covers both needs: the actors behind the history and the
+    // comments, and the three attribution keys on the task itself. The RPC
+    // gives us the uuids; the names come from this single query.
+    const ids = [
+      ...new Set(
+        [
+          ...rows.map((r) => r.user_id),
+          taskRow?.created_by,
+          taskRow?.assigned_by,
+          taskRow?.assigned_to,
+        ].filter(Boolean),
+      ),
+    ] as string[];
+
+    const people = new Map<string, PersonRef>();
 
     if (ids.length) {
-      const { data: people } = await supabase
+      const { data: found } = await supabase
         .from('profiles')
-        .select('id, full_name')
+        .select('id, full_name, employee_id')
         .in('id', ids);
 
-      (people ?? []).forEach((p) => names.set(p.id, p.full_name));
+      (found ?? []).forEach((p) => people.set(p.id, p as PersonRef));
     }
 
     const withName = (row: any) => ({
       ...row,
-      profiles: row.user_id ? { full_name: names.get(row.user_id) } : null,
+      profiles: row.user_id ? { full_name: people.get(row.user_id)?.full_name } : null,
     });
 
     setHistory(((data.history ?? []) as any[]).map(withName));
     setComments(((data.comments ?? []) as any[]).map(withName));
+
+    // Same three fields, shaped as the embedded objects the non-monitoring
+    // query returns, so the JSX below has exactly one shape to render and
+    // does not need to know which read path produced the task.
+    if (taskRow) {
+      setTask({
+        ...(taskRow as Task),
+        creator: people.get(taskRow.created_by) ?? null,
+        assigner: people.get(taskRow.assigned_by) ?? null,
+        assignee: people.get(taskRow.assigned_to) ?? null,
+      });
+    } else {
+      setTask(null);
+    }
 
     setLoading(false);
     setHistoryLoading(false);
@@ -319,10 +358,15 @@ async function loadChain() {
   async function loadTask() {
     if (!id) return;
 
+    // Literal select, not a template: supabase-js types the result from the
+    // string, and an interpolated constant is opaque to that parser. The
+    // `!<column>` hints pin each of the three joins to its own foreign key -
+    // `tasks` has three onto `profiles` and PostgREST cannot tell them apart
+    // otherwise. Must match lib/taskAttribution.ts.
     const { data, error } = await supabase
       .from('tasks')
       .select(
-        'id, title, description, priority, status, due_date, start_date, created_at, completed_at, parent_task_id, assigned_to, assigned_by'
+        'id, title, description, priority, status, due_date, start_date, created_at, completed_at, parent_task_id, created_by, assigned_by, assigned_to, creator:profiles!created_by(id, full_name, employee_id), assigner:profiles!assigned_by(id, full_name, employee_id), assignee:profiles!assigned_to(id, full_name, employee_id)'
       )
       .eq('id', id)
       .single();
@@ -339,7 +383,9 @@ async function loadChain() {
       return;
     }
 
-    setTask(data);
+    // withAttribution narrows the three embedded profiles; see
+    // lib/taskAttribution.ts.
+    setTask(withAttribution(data));
     setLoading(false);
 
     // Load the parent task (delegation chain upward).
@@ -437,8 +483,11 @@ async function confirmStatusUpdate() {
   // Status-change history (and the completion notice) are written by the
   // database trigger tasks_after_update, so they are always recorded.
 
-  // Immediately update the screen
-  setTask(data);
+    // Immediately update the screen. Spread over the existing task so the
+    // attribution names loaded by loadTask() survive - this select only
+    // returns the mutable columns, and blanking the names would make the
+    // header flicker until the next full load.
+    setTask({ ...task, ...data });
 
   // Remove confirmation area
   setSelectedStatus(null);
@@ -576,6 +625,9 @@ async function confirmStatusUpdate() {
   }
 
   const overdue = isOverdue();
+  // Computed once here rather than inline in the JSX, so the guard and the
+  // list below can never disagree about how many lines are shown.
+  const attribution = attributionRows(task);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -686,6 +738,32 @@ async function confirmStatusUpdate() {
               </Text>
             </View>
           </View>
+
+          {/* WHO IS INVOLVED - created by / assigned by / assigned to.
+              The names are presentational only; the uuids above already
+              decided which status buttons are shown. Absent profiles are
+              dropped rather than rendered as "Unknown", so this block
+              disappears entirely on a task with no resolvable people
+              instead of leaving a hole in the card.
+
+              attributionRow wraps rather than reusing infoRow: that one is a
+              fixed two-up, and three names across two columns on a phone is
+              too narrow to read. */}
+          {attribution.length > 0 && (
+            <View style={styles.attributionRow}>
+              {attribution.map((row) => (
+                <View key={row.label} style={styles.attributionItem}>
+                  <Text style={styles.sectionLabel}>
+                    {row.label}
+                  </Text>
+
+                  <Text style={styles.infoValue}>
+                    {row.value}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
           {isMonitoring && (
             <View style={styles.monitorBanner}>
               <Ionicons name="eye-outline" size={16} color="#E87516" />
@@ -1638,6 +1716,21 @@ const styles = StyleSheet.create({
 
   infoItem: {
     flex: 1,
+  },
+
+  // Three names do not fit two-up on a phone, so this row wraps instead.
+  attributionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 16,
+    marginBottom: 18,
+  },
+
+  attributionItem: {
+    // Roughly half a phone width, so two sit per line and the third wraps
+    // cleanly instead of all three squeezing onto one.
+    minWidth: '46%',
+    flexGrow: 1,
   },
 
   infoValue: {

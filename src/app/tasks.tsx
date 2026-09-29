@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { goBack, nav } from '../../lib/navigation';
 import { getMyId, getSessionProfile } from '../../lib/auth';
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams } from 'expo-router';
 import {
   FlatList,
@@ -13,6 +13,17 @@ import {
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { AppPress, EmptyState, SkeletonCard } from '../../lib/ui';
+import {
+  attributionRows,
+  withAttribution,
+  type PersonRef,
+} from '../../lib/taskAttribution';
+import {
+  CATEGORIES,
+  categoriseTask,
+  countByCategory,
+  type Category,
+} from '../../lib/taskCategories';
 
 // The four dashboard KPI cards deep-link here with ?filter=<key>.
 //
@@ -31,6 +42,10 @@ const FILTER_TITLES: Record<TaskFilter, string> = {
   completed_today: 'Completed Today',
 };
 
+// The three category chips live in lib/taskCategories.ts, not here: a route
+// file under app/ may only export its default component, so the rule cannot
+// live here and stay testable.
+
 
 type Task = {
   id: string;
@@ -45,6 +60,14 @@ type Task = {
     | 'rejected';
   due_date: string | null;
   parent_task_id: string | null;
+  created_by: string | null;
+  assigned_by: string | null;
+  assigned_to: string | null;
+  // PostgREST-embedded profile rows for the three keys above. See
+  // lib/taskAttribution.ts for why each join needs an explicit hint.
+  creator: PersonRef | null;
+  assigner: PersonRef | null;
+  assignee: PersonRef | null;
 };
 
 // Precompute once per render, not inside every row.
@@ -78,6 +101,9 @@ const TaskRow = memo(function TaskRow({
   readonly?: boolean;
 }) {
   const overdue = isOverdue(item);
+  // Computed once per render rather than inline in the JSX, so the guard below
+  // and the .map below are guaranteed to agree on what will be shown.
+  const attribution = attributionRows(item);
 
   return (
     <AppPress
@@ -133,6 +159,23 @@ const TaskRow = memo(function TaskRow({
         </View>
       )}
 
+      {/* CREATED BY / ASSIGNED BY / ASSIGNED TO. Computed once per row
+          render, and only the populated lines are drawn - a task with no
+          assigner (a legacy row) shows two lines, not three with a blank. */}
+      {attribution.length > 0 && (
+        <View style={styles.attributionBlock}>
+          {attribution.map((row) => (
+            <View key={row.label} style={styles.attributionRow}>
+              <Text style={styles.attributionLabel}>{row.label}</Text>
+
+              <Text style={styles.attributionValue} numberOfLines={1}>
+                {row.value}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       <View style={styles.viewTaskRow}>
         <Text style={styles.viewTaskText}>VIEW TASK</Text>
 
@@ -161,6 +204,13 @@ export default function TasksScreen() {
   const [refreshing, setRefreshing] = useState(false);
   // Drives the "Company-wide" / "Assigned to you" subtitle.
   const [isCompanyWideScope, setIsCompanyWideScope] = useState(false);
+  // Which of the three relationship buckets is showing. Drives the chip row.
+  const [category, setCategory] = useState<Category>('all');
+  // Held in state rather than re-read during render, because categorisation
+  // needs the id and getMyId() is async - calling it per render would hand the
+  // chip row an empty id on every pass and flash the wrong counts.
+  const [myId, setMyId] = useState('');
+
 
   const loadTasks = useCallback(async () => {
     try {
@@ -172,6 +222,9 @@ export default function TasksScreen() {
         return;
       }
 
+      // Kept for the chip counts and the categorisation below.
+      setMyId(userId);
+
       // Director/Super Admin see the WHOLE company; everyone else is restricted
       // to work assigned to them. No RLS change is needed for this - the
       // tasks_select policy already grants those two roles every row, so
@@ -182,14 +235,37 @@ export default function TasksScreen() {
 
       setIsCompanyWideScope(isCompanyWide);
 
+      // The select is a literal, not a template with ATTRIBUTION_SELECT
+      // spliced in, on purpose: supabase-js types the result from the string
+      // itself, and an interpolated constant is opaque to that parser, which
+      // makes every downstream setTask/setTasks a type error. The three joins
+      // each carry an explicit `!<column>` hint because `tasks` has three
+      // separate foreign keys onto `profiles` and PostgREST cannot otherwise
+      // tell them apart (PGRST200). Keep the three aliases and the three
+      // hints in sync with lib/taskAttribution.ts.
       let query = supabase
         .from('tasks')
         .select(
-          'id, title, description, priority, status, due_date, parent_task_id, assigned_to, completed_at'
+          'id, title, description, priority, status, due_date, parent_task_id, completed_at, created_by, assigned_by, assigned_to, creator:profiles!created_by(id, full_name, employee_id), assigner:profiles!assigned_by(id, full_name, employee_id), assignee:profiles!assigned_to(id, full_name, employee_id)'
         );
 
+      // SCOPE. This used to be `.eq('assigned_to', userId)`, which was
+      // STRICTER than the RLS policy behind it and is why "Assigned by me"
+      // could never show anything for a non-director: a task you gave to
+      // somebody else has assigned_to = THEM, so the filter threw it away
+      // before categorisation ever ran.
+      //
+      // 0023's tasks_select already grants a signed-in user every row where
+      // they are the assignee, the assigner, OR the creator. Matching that
+      // here with `.or(...)` means the three chips partition the rows the
+      // database was always willing to return - no RLS change, and no wider
+      // access than the policy already permits.
+      //
+      // Director/Super Admin keep the unfiltered company-wide read.
       if (!isCompanyWide) {
-        query = query.eq('assigned_to', userId);
+        query = query.or(
+          `assigned_to.eq.${userId},assigned_by.eq.${userId},created_by.eq.${userId}`,
+        );
       }
 
       // --- filters, mirroring dashboard_counts() in migration 0019 ---------
@@ -225,7 +301,10 @@ export default function TasksScreen() {
         return;
       }
 
-      setTasks(data ?? []);
+      // withAttribution narrows the three embedded profiles from whatever shape
+      // the untyped client hands back to a definite PersonRef | null. See
+      // lib/taskAttribution.ts for why that is not optional.
+      setTasks((data ?? []).map(withAttribution));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -246,6 +325,29 @@ export default function TasksScreen() {
       <TaskRow item={item} readonly={isMonitoring} />
     ),
     [isMonitoring]
+  );
+
+  // CATEGORISATION
+  //
+  // Done on the client, not in the query, for one reason: the four KPI
+  // drill-downs arrive here as ?filter=<key> and their predicates are locked
+  // to dashboard_counts() in migration 0019 (see the note above). If the chips
+  // were pushed into the URL or the query as extra server filters, the list
+  // length would stop matching the number on the card that opened it - the
+  // exact drift the 0019 comment warns about. Instead the server answers
+  // "everything in this KPI bucket", and the chip narrows that set in memory.
+  // Tapping a chip is then instant, with no round-trip and no count drift.
+  const categoryCounts = useMemo(
+    () => countByCategory(tasks, myId),
+    [tasks, myId]
+  );
+
+  const visibleTasks = useMemo(
+    () =>
+      category === 'all'
+        ? tasks
+        : tasks.filter((t) => categoriseTask(t, myId) === category),
+    [tasks, category, myId]
   );
 
   return (
@@ -272,6 +374,46 @@ export default function TasksScreen() {
         </View>
       </View>
 
+      {/* THE THREE CATEGORIES.
+          Present on BOTH entry points - plain "My Tasks" and every one of the
+          four KPI drill-downs - because on both the user is asking the same
+          question ("is this mine, was it handed to me, or did I hand it
+          out?"). The counts sit on the chips so a category with nothing in it
+          says so before it is tapped, instead of revealing an empty screen
+          afterwards. */}
+      <View style={styles.chipBar}>
+        {CATEGORIES.map((c) => {
+          const active = category === c.key;
+          const count = categoryCounts[c.key];
+
+          return (
+            <AppPress
+              key={c.key}
+              style={[styles.chip, active && styles.chipActive]}
+              onPress={() => setCategory(c.key)}
+            >
+              <Text
+                style={[
+                  styles.chipText,
+                  active && styles.chipTextActive,
+                ]}
+              >
+                {c.label}
+              </Text>
+
+              <Text
+                style={[
+                  styles.chipCount,
+                  active && styles.chipCountActive,
+                ]}
+              >
+                {count}
+              </Text>
+            </AppPress>
+          );
+        })}
+      </View>
+
       {loading ? (
         // Skeleton holds the layout instead of a spinner, so the list fades
         // in where the placeholders were instead of popping in from nothing.
@@ -284,11 +426,11 @@ export default function TasksScreen() {
         />
       ) : (
         <FlatList
-          data={tasks}
+          data={visibleTasks}
           keyExtractor={(item) => item.id}
           renderItem={renderTask}
           contentContainerStyle={
-            tasks.length === 0
+            visibleTasks.length === 0
               ? styles.emptyContainer
               : styles.listContainer
           }
@@ -306,7 +448,15 @@ export default function TasksScreen() {
             <EmptyState
               icon="clipboard-outline"
               title="No Tasks"
-              message="You don't have any assigned tasks yet."
+              // Named per category, because "no tasks" and "no tasks in THIS
+              // category" are different situations. On a chip that legitimately
+              // has nothing in it - an employee who has never delegated - the
+              // specific label is what stops it reading like a broken screen.
+              message={
+                category === 'all'
+                  ? "You don't have any tasks here yet."
+                  : `No tasks in "${CATEGORIES.find((c) => c.key === category)?.label}".`
+              }
             />
           }
         />
@@ -357,6 +507,60 @@ subtitle: {
   fontSize: 14,
   marginTop: 4,
 },
+
+  // The chip bar is a full-bleed strip between the navy header and the list,
+  // matching the header's edge-to-edge treatment so the categories read as
+  // part of the navigation rather than as a floating control over the cards.
+  chipBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E6EA',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#E2E6EA',
+    backgroundColor: '#F7F9FA',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+
+  chipActive: {
+    backgroundColor: '#12233F',
+    borderColor: '#12233F',
+  },
+
+  chipText: {
+    color: '#3C4757',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  chipTextActive: {
+    color: '#FFFFFF',
+  },
+
+  // The count is deliberately muted on an inactive chip: it is a hint about
+  // where the work is, not the headline. On the active chip it goes solid so
+  // the current list length reads at a glance.
+  chipCount: {
+    color: '#9AA2AC',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+
+  chipCountActive: {
+    color: '#E87516',
+  },
 
   listContainer: {
     padding: 16,
@@ -451,6 +655,36 @@ subtitle: {
     color: '#D64545',
     fontSize: 10,
     fontWeight: '900',
+  },
+
+  // Attribution sits above the VIEW TASK divider so the card still ends on
+  // the same affordance it did before, and the three lines read as one block
+  // rather than three competing facts.
+  attributionBlock: {
+    marginTop: 14,
+    paddingTop: 11,
+    borderTopWidth: 1,
+    borderTopColor: '#EEF0F2',
+    gap: 7,
+  },
+
+  attributionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  attributionLabel: {
+    width: 104,
+    color: '#9AA2AC',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+
+  attributionValue: {
+    flex: 1,
+    color: '#3C4757',
+    fontSize: 12,
+    fontWeight: '700',
   },
 
   viewTaskRow: {

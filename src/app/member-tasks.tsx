@@ -15,6 +15,11 @@ import { goBack, nav } from '../../lib/navigation';
 import { supabase } from '../../lib/supabase';
 import { AppPress, EmptyState, SkeletonCard } from '../../lib/ui';
 import { COLORS, statusColor, statusLabel } from '../constants/app';
+import {
+  attributionRows,
+  withAttribution,
+  type PersonRef,
+} from '../../lib/taskAttribution';
 
 /**
  * MEMBER TASKS
@@ -39,6 +44,14 @@ type MemberTask = {
   due_date: string | null;
   assigned_by: string | null;
   parent_task_id: string | null;
+  // The assignee is the member this screen is about, so their name is the
+  // page header - but it is still joined here so the card can name the
+  // creator and the assigner beside it.
+  created_by: string | null;
+  assigned_to: string | null;
+  creator: PersonRef | null;
+  assigner: PersonRef | null;
+  assignee: PersonRef | null;
 };
 
 type Member = {
@@ -75,6 +88,13 @@ const MemberTaskRow = memo(function MemberTaskRow({
   const handlePress = useCallback(() => {
     nav({ pathname: '/task-detail', params: { id: task.id } });
   }, [task.id]);
+
+  // The assignee is already this screen's page header, so only the other two
+  // lines are drawn. Filtered here rather than inside attributionRows so that
+  // helper stays generic for the screens that do show all three.
+  const attributionRowsToShow = attributionRows(task).filter(
+    (r) => r.label !== 'ASSIGNED TO',
+  );
 
   return (
     <AppPress
@@ -134,6 +154,24 @@ const MemberTaskRow = memo(function MemberTaskRow({
           </View>
         )}
       </View>
+
+      {/* On this screen the assignee is already the page header, so repeating
+          "ASSIGNED TO" on every card is pure noise. Only the two lines the
+          header cannot tell you - who raised it, and who handed it over -
+          are drawn. */}
+      {attributionRowsToShow.length > 0 && (
+        <View style={styles.attributionBlock}>
+          {attributionRowsToShow.map((row) => (
+            <View key={row.label} style={styles.attributionRow}>
+              <Text style={styles.attributionLabel}>{row.label}</Text>
+
+              <Text style={styles.attributionValue} numberOfLines={1}>
+                {row.value}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
     </AppPress>
   );
 });
@@ -161,9 +199,16 @@ export default function MemberTasksScreen() {
           .select('id, full_name, employee_id, role, department')
           .eq('id', id)
           .maybeSingle(),
+        // Literal, not a template: supabase-js derives the row type from this
+        // string, and an interpolated constant is opaque to that parser. The
+        // `!<column>` hints pin each of the three joins to its own foreign
+        // key - without them PostgREST cannot disambiguate them. The three
+        // aliases and hints must match lib/taskAttribution.ts.
         supabase
           .from('tasks')
-          .select('id, title, status, priority, due_date, assigned_by, parent_task_id')
+          .select(
+            'id, title, status, priority, due_date, parent_task_id, created_by, assigned_by, assigned_to, creator:profiles!created_by(id, full_name, employee_id), assigner:profiles!assigned_by(id, full_name, employee_id), assignee:profiles!assigned_to(id, full_name, employee_id)'
+          )
           .eq('assigned_to', id)
           .order('due_date', { ascending: true, nullsFirst: false }),
       ]);
@@ -175,7 +220,10 @@ export default function MemberTasksScreen() {
         return;
       }
 
-      setTasks((tasksResult.data ?? []) as MemberTask[]);
+      // withAttribution narrows the three embedded profiles; see
+      // lib/taskAttribution.ts. assigned_by survives it untouched, so the
+      // "Given by me" tab and its counter below still work.
+      setTasks((tasksResult.data ?? []).map(withAttribution));
     } catch (e) {
       console.log('Member tasks load error:', e);
     } finally {
@@ -425,6 +473,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8, paddingVertical: 3,
   },
   subTaskText: { fontSize: 9, fontWeight: '800', color: COLORS.navySoft },
+
+  // Mirrors the block on tasks.tsx: a ruled-off group so the two name lines
+  // read as metadata rather than as more tags.
+  attributionBlock: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    gap: 6,
+  },
+  attributionRow: { flexDirection: 'row', alignItems: 'center' },
+  attributionLabel: {
+    width: 100,
+    fontSize: 9,
+    fontWeight: '800',
+    color: COLORS.textFaint,
+  },
+  attributionValue: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
 
   emptyCard: {
     backgroundColor: COLORS.card, borderRadius: 14, padding: 26,
