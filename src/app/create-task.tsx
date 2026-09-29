@@ -52,88 +52,44 @@ export default function CreateTaskScreen() {
 
     setCurrentProfile(profile);
 
-    // Get all active employees
-    const { data: allProfiles, error } = await supabase
-      .from('profiles')
-      .select(
-        'id, employee_id, full_name, role, department, manager_id, director_id'
-      )
-      .eq('is_active', true)
-      .neq('id', profile.id)
-      .order('full_name', { ascending: true });
+    // WHO YOU MAY ASSIGN TO
+    //
+    // This used to walk the manager_id reporting tree and cap Employees at
+    // themselves, which meant Employee -> Employee was legal in the database
+    // but impossible in the app, and same-role assignment outside your own
+    // tree (Manager -> Head, Manager 2 -> Manager 2) was blocked too.
+    //
+    // It now asks the server. assignable_profiles() returns exactly the
+    // people can_assign_to() would accept on insert - the same function that
+    // guards the write - so this list can never offer a target the database
+    // then rejects. Requirement D: assignment is by user ID, not hierarchy.
+    const { data, error } = await supabase.rpc('assignable_profiles');
 
     if (error) {
-      console.log(
-        'Assignee load error:',
-        error.message
-      );
+      console.log('Assignee load error:', error.message);
       setLoadingAssignees(false);
       return;
     }
 
-    const profiles = allProfiles || [];
+    const people = (data ?? []) as any[];
 
-    // Everyone can always create a task for themselves.
-    const selfOption = {
-      id: profile.id,
-      employee_id: profile.employee_id,
-      full_name: `${profile.full_name} (me)`,
-      role: profile.role,
-      department: profile.department,
-      manager_id: profile.manager_id,
-      director_id: profile.director_id,
-    };
+    // Mark the caller's own row: a self-assigned task is a PERSONAL task,
+    // private to that person, so it has to be obvious which option that is.
+    const labelled = people.map((person) =>
+      person.id === profile.id
+        ? { ...person, full_name: `${person.full_name} (me)` }
+        : person
+    );
 
-    // Super Admin and Director can assign company-wide
-    if (
-      profile.role === 'super_admin' ||
-      profile.role === 'director'
-    ) {
-      setAssignees([selfOption, ...profiles]);
-      setLoadingAssignees(false);
-      return;
+    setAssignees(labelled);
+
+    // Preserve the previous default: Employees are pre-selected onto
+    // themselves. Every other role picks deliberately, so a Director cannot
+    // create a personal task by accident.
+    if (profile.role === 'employee') {
+      setSelectedAssignee(profile.id);
     }
 
-    // Build reporting tree
-    const childrenMap: Record<string, any[]> = {};
-
-    profiles.forEach((person) => {
-      if (!person.manager_id) return;
-
-      if (!childrenMap[person.manager_id]) {
-        childrenMap[person.manager_id] = [];
-      }
-
-      childrenMap[person.manager_id].push(person);
-    });
-
-    // Find everyone below the logged-in user
-    const descendants: any[] = [];
-
-    function collectDownline(managerId: string) {
-      const children = childrenMap[managerId] || [];
-
-      children.forEach((child) => {
-        descendants.push(child);
-        collectDownline(child.id);
-      });
-    }
-
-    if (
-      profile.role === 'head' ||
-      profile.role === 'manager'
-    ) {
-      collectDownline(profile.id);
-
-      // Managers can also create tasks for themselves.
-      setAssignees([selfOption, ...descendants]);
-      setLoadingAssignees(false);
-      return;
-    }
-
-    // Employees: themselves only (pre-selected).
-    setAssignees([selfOption]);
-    setSelectedAssignee(profile.id);
     setLoadingAssignees(false);
   } catch (error) {
     console.log('Load assignees error:', error);

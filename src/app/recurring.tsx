@@ -61,14 +61,16 @@ export default function RecurringScreen() {
       }
       setItems(data ?? []);
 
-      // People this user may assign to (RLS already scopes profiles).
-      const { data: people } = await supabase
-        .from('profiles')
-        .select('id, full_name, employee_id, department, role')
-        .eq('is_active', true)
-        .neq('id', me.id)
-        .order('full_name', { ascending: true });
-      setAssignees(people ?? []);
+      // People this user may assign to.
+      //
+      // Same source of truth as the Create Task picker: this calls
+      // assignable_profiles(), which applies can_assign_to(). The old query
+      // returned every active profile with no role check, so an Employee
+      // could pick a Director here and only discover the rejection on save.
+      // Self is now included, which also makes a personal recurring task
+      // possible.
+      const { data: people } = await supabase.rpc('assignable_profiles');
+      setAssignees((people ?? []) as any[]);
     } finally {
       setLoading(false);
       setRefreshing(false);
