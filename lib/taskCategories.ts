@@ -54,6 +54,41 @@ export type TaskKeys = {
 };
 
 /**
+ * Is this task still OPEN, i.e. work somebody has to act on?
+ *
+ * The three relationship chips describe OPEN work only. A finished task is
+ * still legitimately "assigned to me" - the relationship does not stop
+ * existing when the job is done - but listing it under a chip whose whole
+ * promise is "what is on my plate" buries today's work under yesterday's
+ * completions.
+ *
+ * WHY THIS IS A SEPARATE PREDICATE RATHER THAN A BRANCH IN categoriseTask
+ * ----------------------------------------------------------------------
+ * Those are two independent questions and conflating them would make the
+ * answer wrong in a way that is hard to see:
+ *
+ *   categoriseTask   WHOSE is this?      mine | assigned_to_me | assigned_by_me
+ *   isOpen           IS IT STILL WORK?   true | false
+ *
+ * A completed task is still correctly "assigned to me"; it is just no longer
+ * open. Keeping them apart means "All" can show finished work under its true
+ * relationship while the three chips stay a to-do view.
+ *
+ * Plain "My Tasks" is a to-do list: it contains OPEN work only. Finished
+ * work does not belong there at all - not under a chip, and not under "All"
+ * either. Burying today's list under yesterday's completions is exactly the
+ * complaint that produced this rule.
+ *
+ * The way back to finished work is the dashboard's "Completed Today" card,
+ * which opens a KPI drill-down whose server bucket is completed rows.
+ * (Completions older than today are not listable anywhere - that is the
+ * accepted tradeoff, stated plainly so nobody rediscovers it later.)
+ */
+export function isOpenTask(task: { status: string }): boolean {
+  return task.status !== 'completed';
+}
+
+/**
  * Which bucket does this task belong to, from `myId`'s point of view?
  *
  * Returns one of the three, or null when the task has no relationship to me.

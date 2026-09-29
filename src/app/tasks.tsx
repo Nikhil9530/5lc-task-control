@@ -22,6 +22,7 @@ import {
   CATEGORIES,
   categoriseTask,
   countByCategory,
+  isOpenTask,
   type Category,
 } from '../../lib/taskCategories';
 
@@ -337,18 +338,34 @@ export default function TasksScreen() {
   // exact drift the 0019 comment warns about. Instead the server answers
   // "everything in this KPI bucket", and the chip narrows that set in memory.
   // Tapping a chip is then instant, with no round-trip and no count drift.
-  const categoryCounts = useMemo(
-    () => countByCategory(tasks, myId),
-    [tasks, myId]
+  // THE BASE SET
+  //
+  // My Tasks (no KPI filter) is a to-do list: completed rows are dropped from
+  // the base set itself, so no chip - "All" included - can show them. The
+  // dashboard's "Completed Today" card is the way back to finished work, and
+  // it arrives with its own server bucket, so it is not starved by this.
+  const visibleBase = useMemo(
+    () => (taskFilter ? tasks : tasks.filter(isOpenTask)),
+    [tasks, taskFilter],
   );
 
-  const visibleTasks = useMemo(
-    () =>
-      category === 'all'
-        ? tasks
-        : tasks.filter((t) => categoriseTask(t, myId) === category),
-    [tasks, category, myId]
-  );
+  const categoryCounts = useMemo(() => {
+    // Counted over the same base set that is listed: the number on
+    // "Assigned to me" is the number you will actually see when you tap it.
+    const counted = countByCategory(visibleBase, myId);
+
+    return { ...counted, all: visibleBase.length };
+  }, [visibleBase, myId]);
+
+  const visibleTasks = useMemo(() => {
+    if (category === 'all') return visibleBase;
+
+    // Open work first, relationship second. A completed task never lands here
+    // even when its keys would place it in the tapped category.
+    return visibleBase.filter(
+      (t) => isOpenTask(t) && categoriseTask(t, myId) === category,
+    );
+  }, [visibleBase, category, myId]);
 
   return (
     <SafeAreaView style={styles.container}>
