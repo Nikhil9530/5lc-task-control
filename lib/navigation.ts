@@ -93,6 +93,14 @@ export function claimAuthRedirect(target: Href, from: string): boolean {
  * This is locked globally (not per-destination) because "back" has no
  * destination - two fast taps would otherwise pop two screens and skip past
  * the screen the user wanted to return to.
+ *
+ * FALLBACK: screens opened from the bottom nav use `navReplace()`, which
+ * REPLACES the dashboard instead of stacking on top of it - so the stack can
+ * hold nothing but the current screen (`canGoBack() === false`). `router.back()`
+ * then has no target and silently does nothing, which is why the Settings
+ * back button appeared dead. In that case we replace to the dashboard, the
+ * hub every role returns to, rather than leaving a dead button. `replace`
+ * (not `push`) so the empty-history state cannot stack up.
  */
 export function goBack(): void {
   const now = Date.now();
@@ -100,5 +108,10 @@ export function goBack(): void {
   if (now - lastBackAt < TAP_LOCK_MS) return;
 
   lastBackAt = now;
-  router.back();
+
+  if (router.canGoBack()) {
+    router.back();
+  } else {
+    router.replace('/dashboard');
+  }
 }

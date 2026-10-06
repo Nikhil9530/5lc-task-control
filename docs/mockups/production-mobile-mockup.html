@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>5LC Production — Mobile Mockup (Laser / Bending / Fabrication)</title>
+<style>
+  :root{
+    --navy:#12233F; --navySoft:#344258; --orange:#E87516; --orangeSoft:#FFF0E5;
+    --bg:#F4F6F8; --card:#FFFFFF; --border:#E2E6EA; --text:#182337;
+    --textSoft:#66717F; --textFaint:#9AA2AC; --red:#D64545; --green:#168653;
+    --amber:#D9A227;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Segoe UI',Roboto,sans-serif}
+  body{background:#DDE3EA;padding:24px;color:var(--text)}
+  h1{font-size:20px;margin-bottom:4px}
+  .sub{color:var(--textSoft);font-size:13px;margin-bottom:18px}
+  .row{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+  .slot{width:410px}
+  .cap{font-size:13px;font-weight:700;color:var(--navy);margin:0 0 6px 4px}
+  .cap small{font-weight:400;color:var(--textSoft)}
+  .frame{width:410px;height:840px;background:var(--bg);border:10px solid #0E0E10;
+    border-radius:34px;overflow:hidden;position:relative;box-shadow:0 12px 30px rgba(0,0,0,.25)}
+  .status{height:26px;background:var(--navy);color:#fff;font-size:11px;display:flex;
+    align-items:center;justify-content:space-between;padding:0 16px}
+  .appbar{background:var(--navy);color:#fff;padding:10px 14px 12px}
+  .appbar .t{display:flex;justify-content:space-between;align-items:center}
+  .appbar h2{font-size:17px}
+  .appbar .mth{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);
+    color:#fff;border-radius:8px;font-size:12px;padding:5px 9px}
+  .asof{font-size:10.5px;color:#B9C4D4;margin-top:3px}
+  .vtabs{display:flex;background:var(--navy);padding:0 14px;gap:18px}
+  .vtabs div{color:#9FB0C6;font-size:13px;font-weight:600;padding:9px 2px 8px;border-bottom:2.5px solid transparent}
+  .vtabs div.on{color:#fff;border-color:var(--orange)}
+  .body{position:absolute;top:97px;bottom:0;left:0;right:0;overflow:auto;padding:12px}
+  .body::-webkit-scrollbar{display:none}
+  /* KPI grid */
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .tile{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:9px 10px}
+  .tile .lbl{font-size:9.5px;font-weight:700;letter-spacing:.4px;color:var(--textSoft);text-transform:uppercase}
+  .tile .val{font-size:21px;font-weight:800;color:var(--navy);margin-top:2px}
+  .tile .val span{font-size:11px;font-weight:600;color:var(--textSoft)}
+  .tile .sub{font-size:10px;color:var(--textFaint);margin-top:1px}
+  .tile.accent .val{color:var(--orange)}
+  .chip{display:inline-block;font-size:10px;font-weight:700;border-radius:6px;padding:1px 5px;margin-left:4px;vertical-align:middle}
+  .up{background:#E8F6EF;color:var(--green)} .dn{background:#FDEBEC;color:var(--red)}
+  .strip{background:var(--navy);color:#fff;border-radius:10px;padding:8px 12px;font-size:12px;
+    display:flex;justify-content:space-between;align-items:center;margin-top:10px}
+  .strip b{color:#FFC48A}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:11px 12px;margin-top:10px}
+  .card h3{font-size:12.5px;color:var(--navy);margin-bottom:8px;display:flex;justify-content:space-between}
+  .card h3 span{font-size:10px;color:var(--textFaint);font-weight:500}
+  .b{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:11.5px}
+  .b .n{width:44px;font-weight:700;color:var(--navySoft)}
+  .b .tr{flex:1;background:#EEF1F4;border-radius:5px;height:14px;overflow:hidden}
+  .b .fl{height:100%;background:linear-gradient(90deg,var(--orange),#F59A4C);border-radius:5px}
+  .b .v{width:64px;text-align:right;font-weight:700;color:var(--navy)}
+  .chart{width:100%;height:110px}
+  .pills{display:flex;gap:8px;margin-top:10px}
+  .pill{flex:1;background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:7px 10px;font-size:11px;color:var(--textSoft)}
+  .pill b{display:block;font-size:15px;color:var(--navy)}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;background:var(--card);border-radius:10px;overflow:hidden}
+  th{background:var(--navy);color:#fff;font-size:10.5px;padding:7px 8px;text-align:right}
+  th:first-child{text-align:left}
+  td{padding:6.5px 8px;border-bottom:1px solid var(--border);text-align:right;font-weight:600;color:var(--navy)}
+  td:first-child{text-align:left;color:var(--textSoft);font-weight:500}
+  tr:last-child td{border-bottom:none}
+  .grp{display:flex;gap:5px;align-items:flex-end;height:74px;margin-top:6px;justify-content:space-around}
+  .g{display:flex;gap:3px;align-items:flex-end;height:100%}
+  .g i{width:11px;border-radius:3px 3px 0 0;display:block}
+  .g i.a{background:var(--orange)} .g i.b{background:var(--navy)}
+  .gcap{font-size:9.5px;color:var(--textSoft);text-align:center;margin-top:3px}
+  .lg{font-size:10px;color:var(--textSoft);margin-top:6px}
+  .lg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin:0 4px 0 10px;vertical-align:middle}
+  .bnav{position:absolute;bottom:0;left:0;right:0;height:56px;background:#fff;border-top:1px solid var(--border);
+    display:flex;justify-content:space-around;align-items:center;font-size:9.5px;color:var(--textFaint)}
+  .bnav div{text-align:center} .bnav div.on{color:var(--orange);font-weight:700}
+  .bnav .ic{font-size:17px;display:block}
+  .body.bnavpad{bottom:56px}
+  .qa{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .q{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:11px 6px;text-align:center;font-size:10.5px;color:var(--textSoft)}
+  .q .e{font-size:19px;display:block;margin-bottom:3px}
+  .sec{font-size:12px;font-weight:800;color:var(--navy);margin:14px 2px 7px;text-transform:uppercase;letter-spacing:.6px}
+  .dept{display:flex;justify-content:space-between;align-items:center;background:var(--card);
+    border:1px solid var(--border);border-left:4px solid var(--orange);border-radius:10px;padding:11px 12px;margin-bottom:8px}
+  .dept .nm{font-size:13.5px;font-weight:800;color:var(--navy)}
+  .dept .mt{font-size:10.5px;color:var(--textSoft);margin-top:2px}
+  .dept .big{font-size:16px;font-weight:800;color:var(--orange)}
+  .dept .ar{color:var(--textFaint);font-size:16px;margin-left:8px}
+  .tag{display:inline-block;background:var(--orangeSoft);color:var(--orange);font-size:9.5px;
+    font-weight:800;border-radius:5px;padding:2px 6px;margin-left:6px;vertical-align:middle}
+  .note{background:#fff8e6;border:1px dashed #E4B948;border-radius:8px;padding:7px 9px;font-size:10.5px;color:#7A5B00;margin-top:10px}
+</style>
+</head>
+<body>
+<h1>5LC Production — Mobile Mockup <span class="tag" style="margin-left:8px">SAMPLE DATA</span></h1>
+<div class="sub">Static preview only — not the real app. 2 views per department (Overview + Monthly), navy/orange brand. Open in a browser and scroll each phone.</div>
+<div class="row">
+<!-- ============ ENTRY: dashboard with footer (Tasks -> Production) ============ -->
+<div class="slot">
+  <p class="cap">DECIDED ENTRY — Existing footer, Tasks tab → Production <small>(dashboard content unchanged)</small></p>
+  <div class="frame">
+    <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="appbar"><div class="t"><h2>Good morning, Nikhil</h2></div>
+      <div class="asof">Role: Director+ · Production section visible only to you &amp; directors</div></div>
+    <div class="body bnavpad">
+      <div class="sec" style="margin-top:4px">Quick Actions</div>
+      <div class="qa">
+        <div class="q"><span class="e">✅</span>My Tasks</div>
+        <div class="q"><span class="e">➕</span>New Task</div>
+        <div class="q"><span class="e">📊</span>Reports</div>
+      </div>
+      <div class="sec">Task Status</div>
+      <div class="dept" style="border-left-color:#8D98A5"><div><div class="nm">Not Started — 4</div><div class="mt">In Progress — 6</div></div></div>
+      <div class="dept" style="border-left-color:#D9A227"><div><div class="nm">Waiting — 3</div><div class="mt">Completed Today — 11</div></div></div>
+      <div class="sec">Accountability</div>
+      <div class="dept" style="border-left-color:#E87516"><div><div class="nm">Every commitment has an owner and deadline.</div><div class="mt">Delays and completions are recorded.</div></div></div>
+      <div class="note">🏠 <b>Home page 100% unchanged</b> — every section above is exactly what ships today (KPIs, Quick Actions, My Work/Management, Task Status, Accountability, footer brand). <b>The ONLY change in the whole app:</b> footer's 2nd tab <b>Tasks → Production</b> — for <b>every role, no exceptions</b>. Tasks screen still reachable for everyone via KPI cards &amp; “View All”.</div>
+    </div>
+    <div class="bnav">
+      <div class="on"><span class="ic">🏠</span>Dashboard</div>
+      <div><span class="ic">📊</span>Production</div>
+      <div><span class="ic">👥</span>Team</div>
+      <div><span class="ic">⚙️</span>Settings</div>
+    </div>
+  </div>
+</div>
+<!-- ============ PRODUCTION TAB: dept picker ============ -->
+<div class="slot">
+  <p class="cap">TAP PRODUCTION → dept picker screen <small>(/production — footer stays visible, same 4 tabs)</small></p>
+  <div class="frame">
+    <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="appbar"><div class="t"><h2>Production</h2></div>
+      <div class="asof">Directors only · data as of 5 Oct 2026</div></div>
+    <div class="body bnavpad">
+      <div class="sec" style="margin-top:4px">Select department</div>
+      <div class="dept"><div><div class="nm">🔴 Laser</div><div class="mt">L-1 · L-2 · L-3 · L-4 · outsource</div></div>
+        <div style="text-align:right"><span class="big">412.5 t</span><span class="ar">›</span></div></div>
+      <div class="dept" style="border-left-color:#D9A227"><div><div class="nm">🟠 Bending</div><div class="mt">B-1 · B-2 · B-3 · shift A/B</div></div>
+        <div style="text-align:right"><span class="big">18,460 str</span><span class="ar">›</span></div></div>
+      <div class="dept" style="border-left-color:#344258"><div><div class="nm">🔵 Fabrication</div><div class="mt">Mahindra · Metso · Mesto</div></div>
+        <div style="text-align:right"><span class="big">9,840 pcs</span><span class="ar">›</span></div></div>
+      <div class="note">Same 3 cards → department Overview screens. Footer keeps all 4 slots for <b>every role</b>: <b>Dashboard · Production · Team · Settings</b>. Read-only for everyone — no upload/edit controls anywhere.</div>
+      <div class="sec">Also on this tab</div>
+      <div class="dept" style="border-left-color:#8D98A5"><div><div class="nm">Month selector</div><div class="mt">Jump to any past month (both views)</div></div></div>
+      <div class="dept" style="border-left-color:#8D98A5"><div><div class="nm">Last updated</div><div class="mt">5 Oct 2026, 8:12 PM · by Nikhil</div></div></div>
+    </div>
+    <div class="bnav">
+      <div><span class="ic">🏠</span>Dashboard</div>
+      <div class="on"><span class="ic">📊</span>Production</div>
+      <div><span class="ic">👥</span>Team</div>
+      <div><span class="ic">⚙️</span>Settings</div>
+    </div>
+  </div>
+</div>
+<!-- ============ LASER OVERVIEW ============ -->
+<div class="slot">
+  <p class="cap">LASER → Overview <small>(6 KPIs, today strip, machines, 14-day trend, shifts)</small></p>
+  <div class="frame">
+    <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="appbar">
+      <div class="t"><h2>🔴 Laser</h2><button class="mth">October 2026 ▾</button></div>
+      <div class="asof">Data as of 5 Oct 2026 · updated 8:12 PM by Nikhil</div>
+    </div>
+    <div class="vtabs"><div class="on">Overview</div><div>Monthly</div></div>
+    <div class="body">
+      <div class="kpis">
+        <div class="tile"><div class="lbl">Total Weight</div><div class="val">412.5 <span>t</span></div><div class="sub">incl. outsource 38.2 t</div></div>
+        <div class="tile"><div class="lbl">Total Sheets</div><div class="val">1,846</div><div class="sub">52 sheets/day avg</div></div>
+        <div class="tile"><div class="lbl">Outsourced Weight</div><div class="val">38.2 <span>t</span></div><div class="sub">9.3% of total</div></div>
+        <div class="tile accent"><div class="lbl">₹ / kg</div><div class="val">0.91</div><div class="sub">target ≤ 0.93 ✅</div></div>
+        <div class="tile accent"><div class="lbl">₹ / M-MM</div><div class="val">1.14</div><div class="sub">periphery 68,400 M-MM</div></div>
+        <div class="tile"><div class="lbl">Total Cost</div><div class="val">₹4.86L</div><div class="sub">own + outsource + manpower</div></div>
+      </div>
+      <div class="strip"><span>📅 Today (5 Oct)</span><span><b>18.4 t</b> vs 17.1 t yesterday <b>↑7.6%</b></span></div>
+      <div class="card">
+        <h3>Per-machine weight <span>month to date</span></h3>
+        <div class="b"><span class="n">L-1</span><span class="tr"><span class="fl" style="width:92%"></span></span><span class="v">128.4 t</span></div>
+        <div class="b"><span class="n">L-2</span><span class="tr"><span class="fl" style="width:78%"></span></span><span class="v">109.1 t</span></div>
+        <div class="b"><span class="n">L-3</span><span class="tr"><span class="fl" style="width:64%"></span></span><span class="v">89.3 t</span></div>
+        <div class="b"><span class="n">L-4</span><span class="tr"><span class="fl" style="width:60%"></span></span><span class="v">83.7 t</span></div>
+        <div class="b" style="margin-bottom:0"><span class="n" style="color:#8D98A5">OUT</span><span class="tr"><span class="fl" style="width:27%;background:#8D98A5"></span></span><span class="v" style="color:#8D98A5">38.2 t</span></div>
+      </div>
+      <div class="card">
+        <h3>Daily weight — last 14 days <span>tonnes</span></h3>
+        <svg class="chart" viewBox="0 0 340 110" preserveAspectRatio="none">
+          <polyline fill="none" stroke="#E87516" stroke-width="2.5"
+            points="5,72 30,64 55,70 80,55 105,60 130,42 155,50 180,38 205,46 230,30 255,40 280,26 305,34 330,22"/>
+          <polygon fill="rgba(232,117,22,.12)" stroke="none"
+            points="5,72 30,64 55,70 80,55 105,60 130,42 155,50 180,38 205,46 230,30 255,40 280,26 305,34 330,22 330,105 5,105"/>
+          <line x1="5" y1="105" x2="335" y2="105" stroke="#E2E6EA" stroke-width="1"/>
+          <circle cx="330" cy="22" r="4" fill="#E87516"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#9AA2AC"><span>22 Sep</span><span>29 Sep</span><span>5 Oct</span></div>
+      </div>
+      <div class="pills">
+        <div class="pill">Shift A — weight<b>196.8 t</b></div>
+        <div class="pill">Shift B — weight<b>215.7 t</b></div>
+      </div>
+      <div class="note">Scroll ↑ · Monthly tab has Δ% vs Sep + 6-month bars + MoM table.</div>
+    </div>
+  </div>
+</div>
+<!-- ============ LASER MONTHLY ============ -->
+<div class="slot">
+  <p class="cap">LASER → Monthly <small>(Δ% vs Sep, MoM table, 6-month bars, per-machine MoM)</small></p>
+  <div class="frame">
+    <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="appbar">
+      <div class="t"><h2>🔴 Laser</h2><button class="mth">October 2026 ▾</button></div>
+      <div class="asof">Monthly analysis · compare vs previous month</div>
+    </div>
+    <div class="vtabs"><div>Overview</div><div class="on">Monthly</div></div>
+    <div class="body">
+      <div class="kpis">
+        <div class="tile"><div class="lbl">Total Weight</div><div class="val">412.5 <span>t</span><span class="chip dn">-6.2%</span></div><div class="sub">Sep: 439.8 t</div></div>
+        <div class="tile"><div class="lbl">Total Sheets</div><div class="val">1,846<span class="chip up">+3.1%</span></div><div class="sub">Sep: 1,791</div></div>
+        <div class="tile"><div class="lbl">Outsourced</div><div class="val">38.2 <span>t</span><span class="chip up">+18%</span></div><div class="sub">Sep: 32.4 t</div></div>
+        <div class="tile accent"><div class="lbl">₹ / kg</div><div class="val">0.91<span class="chip up">-2.1%</span></div><div class="sub">Sep: 0.93 · target ✅</div></div>
+        <div class="tile accent"><div class="lbl">₹ / M-MM</div><div class="val">1.14<span class="chip dn">+1.8%</span></div><div class="sub">Sep: 1.12</div></div>
+        <div class="tile"><div class="lbl">Total Cost</div><div class="val">₹4.86L<span class="chip dn">+4.4%</span></div><div class="sub">Sep: ₹4.65L</div></div>
+      </div>
+      <div class="card" style="padding-top:6px">
+        <h3>Month-over-month <span>Oct vs Sep</span></h3>
+        <table>
+          <tr><th>Metric</th><th>Oct 2026</th><th>Sep 2026</th><th>Δ</th></tr>
+          <tr><td>Weight (t)</td><td>412.5</td><td>439.8</td><td style="color:#D64545">-6.2%</td></tr>
+          <tr><td>Sheets</td><td>1,846</td><td>1,791</td><td style="color:#168653">+3.1%</td></tr>
+          <tr><td>Outsource (t)</td><td>38.2</td><td>32.4</td><td style="color:#D64545">+18%</td></tr>
+          <tr><td>₹/kg</td><td>0.91</td><td>0.93</td><td style="color:#168653">-2.1%</td></tr>
+          <tr><td>₹/M-MM</td><td>1.14</td><td>1.12</td><td style="color:#D64545">+1.8%</td></tr>
+          <tr><td>Cost (₹L)</td><td>4.86</td><td>4.65</td><td style="color:#D64545">+4.4%</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3>6-month weight trend <span>tonnes</span></h3>
+        <div class="grp">
+          <div class="g"><i class="a" style="height:58%"></i></div>
+          <div class="g"><i class="a" style="height:66%"></i></div>
+          <div class="g"><i class="a" style="height:74%"></i></div>
+          <div class="g"><i class="a" style="height:81%"></i></div>
+          <div class="g"><i class="a" style="height:96%"></i></div>
+          <div class="g"><i class="a" style="height:88%"></i></div>
+        </div>
+        <div style="display:flex;justify-content:space-around;font-size:9.5px;color:#66717F">
+          <span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span>
+        </div>
+        <div class="lg"><i style="background:#E87516"></i>monthly total weight — Oct is month-to-date</div>
+      </div>
+      <div class="card">
+        <h3>Per-machine: Oct vs Sep <span>tonnes</span></h3>
+        <div class="grp">
+          <div class="g"><i class="a" style="height:84%"></i><i class="b" style="height:92%"></i></div>
+          <div class="g"><i class="a" style="height:70%"></i><i class="b" style="height:74%"></i></div>
+          <div class="g"><i class="a" style="height:58%"></i><i class="b" style="height:66%"></i></div>
+          <div class="g"><i class="a" style="height:54%"></i><i class="b" style="height:56%"></i></div>
+        </div>
+        <div style="display:flex;justify-content:space-around;font-size:9.5px;color:#66717F">
+          <span>L-1</span><span>L-2</span><span>L-3</span><span>L-4</span>
+        </div>
+        <div class="lg"><i style="background:#E87516"></i>Oct <i style="background:#12233F"></i>Sep</div>
+      </div>
+      <div class="note">Down arrows in red = worse, up in green = better (inverted for cost metrics). Tap month to change.</div>
+    </div>
+  </div>
+</div>
+<!-- ============ BENDING OVERVIEW ============ -->
+<div class="slot">
+  <p class="cap">BENDING → Overview <small>(6 KPIs incl. ₹/kg + downtime, machines, trend, shifts)</small></p>
+  <div class="frame">
+    <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="appbar">
+      <div class="t"><h2>🟠 Bending</h2><button class="mth">October 2026 ▾</button></div>
+      <div class="asof">Data as of 5 Oct 2026 · updated 8:12 PM by Nikhil</div>
+    </div>
+    <div class="vtabs"><div class="on">Overview</div><div>Monthly</div></div>
+    <div class="body">
+      <div class="kpis">
+        <div class="tile"><div class="lbl">Total Strokes</div><div class="val">18,460</div><div class="sub">3,692/day avg</div></div>
+        <div class="tile"><div class="lbl">Total Weight</div><div class="val">96.4 <span>t</span></div><div class="sub">32.1 t / machine avg</div></div>
+        <div class="tile accent"><div class="lbl">₹ / kg</div><div class="val">4.10</div><div class="sub">manpower ÷ weight</div></div>
+        <div class="tile accent"><div class="lbl">₹ / Stroke</div><div class="val">2.15</div><div class="sub">target ≤ 2.30 ✅</div></div>
+        <div class="tile"><div class="lbl">Manpower Cost</div><div class="val">₹3.95L</div><div class="sub">shift A + B + OT</div></div>
+        <div class="tile"><div class="lbl">Downtime</div><div class="val">6.2 <span>hrs</span></div><div class="sub">3.4% of run time</div></div>
+      </div>
+      <div class="strip"><span>📅 Today (5 Oct)</span><span><b>1,310 strokes</b> vs 1,245 yesterday <b>↑5.2%</b></span></div>
+      <div class="card">
+        <h3>Per-machine strokes <span>month to date</span></h3>
+        <div class="b"><span class="n">B-1</span><span class="tr"><span class="fl" style="width:94%"></span></span><span class="v">7,120</span></div>
+        <div class="b"><span class="n">B-2</span><span class="tr"><span class="fl" style="width:82%"></span></span><span class="v">6,240</span></div>
+        <div class="b"><span class="n">B-3</span><span class="tr"><span class="fl" style="width:65%"></span></span><span class="v">5,100</span></div>
+      </div>
+      <div class="card">
+        <h3>Daily strokes — last 14 days <span>strokes</span></h3>
+        <svg class="chart" viewBox="0 0 340 110" preserveAspectRatio="none">
+          <polyline fill="none" stroke="#E87516" stroke-width="2.5"
+            points="5,60 30,55 55,66 80,48 105,58 130,44 155,52 180,36 205,44 230,34 255,46 280,30 305,38 330,28"/>
+          <polygon fill="rgba(232,117,22,.12)" stroke="none"
+            points="5,60 30,55 55,66 80,48 105,58 130,44 155,52 180,36 205,44 230,34 255,46 280,30 305,38 330,28 330,105 5,105"/>
+          <line x1="5" y1="105" x2="335" y2="105" stroke="#E2E6EA" stroke-width="1"/>
+          <circle cx="330" cy="28" r="4" fill="#E87516"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#9AA2AC"><span>22 Sep</span><span>29 Sep</span><span>5 Oct</span></div>
+      </div>
+      <div class="pills">
+        <div class="pill">Shift A — strokes<b>9,640</b></div>
+        <div class="pill">Shift B — strokes<b>8,820</b></div>
+      </div>
+      <div class="note">Downtime tile counts only if you record it daily — else we swap it for “Weight / stroke”.</div>
+    </div>
+  </div>
+</div>
+<!-- ============ FABRICATION OVERVIEW ============ -->
+<div class="slot">
+  <p class="cap">FABRICATION → Overview <small>(6 KPIs incl. ₹/kg, stations, trend)</small></p>
+  <div class="frame">
+    <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="appbar">
+      <div class="t"><h2>🔵 Fabrication</h2><button class="mth">October 2026 ▾</button></div>
+      <div class="asof">Data as of 5 Oct 2026 · updated 8:12 PM by Nikhil</div>
+    </div>
+    <div class="vtabs"><div class="on">Overview</div><div>Monthly</div></div>
+    <div class="body">
+      <div class="kpis">
+        <div class="tile"><div class="lbl">Pieces</div><div class="val">9,840</div><div class="sub">1,968/day avg</div></div>
+        <div class="tile"><div class="lbl">Total Weight</div><div class="val">64.8 <span>t</span></div><div class="sub">6.6 kg / piece avg</div></div>
+        <div class="tile accent"><div class="lbl">₹ / kg</div><div class="val">5.40</div><div class="sub">manpower ÷ weight</div></div>
+        <div class="tile accent"><div class="lbl">₹ / Piece</div><div class="val">2.25</div><div class="sub">target ≤ 2.40 ✅</div></div>
+        <div class="tile"><div class="lbl">Manpower Cost</div><div class="val">₹3.50L</div><div class="sub">3 stations</div></div>
+        <div class="tile"><div class="lbl">Stations Active</div><div class="val">3 <span>/ 3</span></div><div class="sub">Mahindra · Metso · Mesto</div></div>
+      </div>
+      <div class="strip"><span>📅 Today (5 Oct)</span><span><b>2,040 pcs</b> vs 1,910 yesterday <b>↑6.8%</b></span></div>
+      <div class="card">
+        <h3>Per-station weight <span>month to date</span></h3>
+        <div class="b"><span class="n">Mahin.</span><span class="tr"><span class="fl" style="width:96%"></span></span><span class="v">26.1 t</span></div>
+        <div class="b"><span class="n">Metso</span><span class="tr"><span class="fl" style="width:74%"></span></span><span class="v">20.2 t</span></div>
+        <div class="b"><span class="n">Mesto</span><span class="tr"><span class="fl" style="width:69%"></span></span><span class="v">18.5 t</span></div>
+      </div>
+      <div class="card">
+        <h3>Daily weight — last 14 days <span>tonnes</span></h3>
+        <svg class="chart" viewBox="0 0 340 110" preserveAspectRatio="none">
+          <polyline fill="none" stroke="#E87516" stroke-width="2.5"
+            points="5,78 30,70 55,62 80,66 105,54 130,58 155,46 180,52 205,40 230,48 255,36 280,42 305,30 330,34"/>
+          <polygon fill="rgba(232,117,22,.12)" stroke="none"
+            points="5,78 30,70 55,62 80,66 105,54 130,58 155,46 180,52 205,40 230,48 255,36 280,42 305,30 330,34 330,105 5,105"/>
+          <line x1="5" y1="105" x2="335" y2="105" stroke="#E2E6EA" stroke-width="1"/>
+          <circle cx="330" cy="34" r="4" fill="#E87516"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#9AA2AC"><span>22 Sep</span><span>29 Sep</span><span>5 Oct</span></div>
+      </div>
+      <div class="card">
+        <h3>Stations — ₹/piece <span>lower is better</span></h3>
+        <div class="b"><span class="n">Mahin.</span><span class="tr"><span class="fl" style="width:60%"></span></span><span class="v">₹2.10</span></div>
+        <div class="b"><span class="n">Metso</span><span class="tr"><span class="fl" style="width:72%"></span></span><span class="v">₹2.52</span></div>
+        <div class="b" style="margin-bottom:0"><span class="n">Mesto</span><span class="tr"><span class="fl" style="width:64%"></span></span><span class="v">₹2.24</span></div>
+      </div>
+      <div class="note">Monthly tab: same layout as Laser Monthly (Δ%, MoM table, 6-month bars, station MoM).</div>
+    </div>
+  </div>
+</div>
+<!-- ============ FOOTER / NEXT STEPS ============ -->
+<div class="slot">
+  <p class="cap">How we go forward <small>(the plan, in order)</small></p>
+  <div style="background:#fff;border:1px solid var(--border);border-radius:14px;padding:18px 20px;font-size:13.5px;line-height:1.75">
+    <b>Step 0 — You review this mockup.</b> Tell me: ✅ looks right, or ✏️ change X.<br>
+    <b>Decide:</b> ✅ <b>Entry = footer Tasks tab → Production, for ALL roles</b> (locked) · Bending 6th KPI (Downtime vs Weight/stroke) · Insights out of v1 (rec: yes) · data flow (manual SQL / PC script / storage file)<br><br>
+    <b>Step 1 — Build plan.</b> I write the screen-by-screen spec: routes (<code>/production</code>, dept + Overview/Monthly), components, migration (6 tables + RLS), data flow (manual SQL / script / storage — your pick), exact queries.<br><br>
+    <b>Step 2 — You say GO.</b> Then I code: migration → data layer → screens → charts → role gating → <code>tsc --noEmit</code> green.<br><br>
+    <b>Step 3 — You test</b> on your phone (Expo dev build / EAS). Fix round.<br><br>
+    <b>Step 4 — Ship:</b> commit (incl. the 3 pending files) → EAS build / OTA update → directors see the new Production section.<br><br>
+    <b>Also pending:</b> Sales dashboard Excel (re-share when ready) · first data load into tables (June–Oct 2026 backfill from your Excel)<br>
+    <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+    <b>All numbers above are sample data.</b> Real numbers come from your tables once data flows.
+  </div>
+  <div style="height:20px"></div>
+</div>
+
+
+
+
+
+
+
+</div>
+</body>
+</html>

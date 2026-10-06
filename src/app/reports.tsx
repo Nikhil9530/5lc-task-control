@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, Platform, RefreshControl, SafeAreaView,
   ScrollView, StyleSheet, Text, View,
@@ -15,6 +15,12 @@ import {
   withAttribution,
   type PersonRef,
 } from '../../lib/taskAttribution';
+import {
+  CATEGORIES,
+  categoriseTask,
+  countByCategory,
+  type Category,
+} from '../../lib/taskCategories';
 
 type Stat = { label: string; value: number; color: string };
 
@@ -112,6 +118,14 @@ export default function ReportsScreen() {
   const [total, setTotal] = useState(0);
   const [completedAll, setCompletedAll] = useState(0);
   const [overdueList, setOverdueList] = useState<OverdueItem[]>([]);
+  // Viewer identity for the category chips - same rule as tasks.tsx: the
+  // chips answer "what is MY relationship to this row", so they are counted
+  // from the signed-in viewer, not from whoever each row belongs to.
+  const [myId, setMyId] = useState('');
+  // Which of the four relationship buckets the "Most Overdue" list is
+  // showing. The status/summary cards above are deliberately NOT filtered -
+  // they carry no attribution keys, so only the list can be categorised.
+  const [category, setCategory] = useState<Category>('all');
 
   const load = useCallback(async () => {
     try {
@@ -121,6 +135,8 @@ export default function ReportsScreen() {
         router.replace('/');
         return;
       }
+      // Kept for the category chip counts below.
+      setMyId(me.id);
       // RLS scopes these to the viewer's permitted hierarchy automatically.
       const { data: all } = await supabase.from('tasks').select('status, due_date');
       const rows = all ?? [];
@@ -168,6 +184,22 @@ export default function ReportsScreen() {
   useEffect(() => { load(); }, [load]);
 
   const completionRate = total > 0 ? Math.round((completedAll / total) * 100) : 0;
+
+  // One pass -> chip switching costs nothing, mirroring tasks.tsx.
+  const categoryCounts = useMemo(
+    () => countByCategory(overdueList, myId),
+    [overdueList, myId],
+  );
+
+  const visibleOverdue = useMemo(() => {
+    if (category === 'all') return overdueList;
+    // categoriseTask returns null for rows with no relationship to the
+    // viewer; `=== category` excludes them for free (null !== 'mine' etc.).
+    return overdueList.filter((t) => categoriseTask(t, myId) === category);
+  }, [overdueList, category, myId]);
+
+  const activeCategoryLabel =
+    CATEGORIES.find((c) => c.key === category)?.label ?? 'All';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -218,10 +250,56 @@ export default function ReportsScreen() {
                 <Text style={styles.cardTitle}>Most Overdue</Text>
                 <Ionicons name="warning-outline" size={20} color={COLORS.red} />
               </View>
+
+              {/* THE FOUR CATEGORIES - same four, same order and semantics
+                  as tasks.tsx, so the chips read identically on every
+                  screen that shows tasks. Hidden when there is nothing to
+                  categorise: a chip row over "No overdue tasks. Great work."
+                  would be noise. */}
+              {overdueList.length > 0 && (
+                <View style={styles.chipRow}>
+                  {CATEGORIES.map((c) => {
+                    const active = category === c.key;
+
+                    return (
+                      <AppPress
+                        key={c.key}
+                        style={[styles.chip, active && styles.chipActive]}
+                        onPress={() => setCategory(c.key)}
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            active && styles.chipTextActive,
+                          ]}
+                        >
+                          {c.label}
+                        </Text>
+
+                        <Text
+                          style={[
+                            styles.chipCount,
+                            active && styles.chipCountActive,
+                          ]}
+                        >
+                          {categoryCounts[c.key]}
+                        </Text>
+                      </AppPress>
+                    );
+                  })}
+                </View>
+              )}
+
               {overdueList.length === 0 ? (
                 <Text style={styles.emptyText}>No overdue tasks. Great work.</Text>
+              ) : visibleOverdue.length === 0 ? (
+                // Named per category, the same way tasks.tsx does it: an
+                // empty chip is a legitimate state, not a broken screen.
+                <Text style={styles.emptyText}>
+                  No tasks in &quot;{activeCategoryLabel}&quot;.
+                </Text>
               ) : (
-                overdueList.map((t) => (
+                visibleOverdue.map((t) => (
                   <OverdueRow key={t.id} item={t} />
                 ))
               )}
@@ -262,6 +340,27 @@ const styles = StyleSheet.create({
   },
   cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   cardTitle: { color: COLORS.navy, fontSize: 15, fontWeight: '900', marginBottom: 8 },
+  // Chips: same pill shape and navy-active treatment as the category row on
+  // tasks.tsx, sized to wrap inside a card rather than sit on a full-bleed
+  // strip.
+  chipRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8,
+    marginTop: 4, marginBottom: 10,
+  },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderWidth: 1, borderColor: COLORS.border,
+    backgroundColor: COLORS.bg, borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 7,
+  },
+  chipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
+  chipText: { color: COLORS.text, fontSize: 12, fontWeight: '700' },
+  chipTextActive: { color: '#FFFFFF' },
+  // The inactive count is muted on purpose - it hints where the work is; on
+  // the active chip it flips to orange so the visible list length reads at
+  // a glance.
+  chipCount: { color: COLORS.textFaint, fontSize: 11, fontWeight: '900' },
+  chipCountActive: { color: COLORS.orange },
   statRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0F2F4',

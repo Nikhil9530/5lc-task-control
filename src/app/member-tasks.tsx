@@ -20,6 +20,12 @@ import {
   withAttribution,
   type PersonRef,
 } from '../../lib/taskAttribution';
+import {
+  CATEGORIES,
+  categoriseTask,
+  countByCategory,
+  type Category,
+} from '../../lib/taskCategories';
 
 /**
  * MEMBER TASKS
@@ -185,6 +191,12 @@ export default function MemberTasksScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
+  // The standard four relationship categories, same lib and same semantics
+  // as tasks.tsx - counted from the VIEWER (myId), so on this screen
+  // "Assigned by me" means "of this member's work, the part I handed over".
+  // It composes with the tab row below: pick a category AND a tab, and the
+  // list is the intersection.
+  const [category, setCategory] = useState<Category>('all');
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -258,21 +270,34 @@ export default function MemberTasksScreen() {
     return { total: tasks.length, open, overdue, completed, givenByMe };
   }, [tasks, myId, today]);
 
+  // Chip counts: one pass, same helper as every other screen.
+  const categoryCounts = useMemo(
+    () => countByCategory(tasks, myId),
+    [tasks, myId],
+  );
+
   const visible = useMemo(() => {
+    // Tab first...
+    let rows: MemberTask[];
+
     if (filter === 'given_by_me') {
-      return tasks.filter((t) => !!myId && t.assigned_by === myId);
+      rows = tasks.filter((t) => !!myId && t.assigned_by === myId);
+    } else if (filter === 'open') {
+      rows = tasks.filter((t) => t.status !== 'completed');
+    } else if (filter === 'overdue') {
+      rows = tasks.filter(isOverdue);
+    } else if (filter === 'completed') {
+      rows = tasks.filter((t) => t.status === 'completed');
+    } else {
+      rows = tasks;
     }
-    if (filter === 'open') {
-      return tasks.filter((t) => t.status !== 'completed');
-    }
-    if (filter === 'overdue') {
-      return tasks.filter(isOverdue);
-    }
-    if (filter === 'completed') {
-      return tasks.filter((t) => t.status === 'completed');
-    }
-    return tasks;
-  }, [filter, tasks, myId, today]);
+
+    // ...then the category, so the two rows compose into one intersection.
+    // 'all' short-circuits - it is the default and the common case.
+    if (category === 'all') return rows;
+
+    return rows.filter((t) => categoriseTask(t, myId) === category);
+  }, [filter, category, tasks, myId, today]);
 
   const displayName = member?.full_name ?? name ?? 'Member';
 
@@ -340,6 +365,37 @@ export default function MemberTasksScreen() {
             </Text>
             <Text style={styles.statLabel}>BY ME</Text>
           </View>
+        </View>
+
+        {/* THE FOUR CATEGORIES - the same row tasks.tsx shows, placed above
+            the screen's own tabs so the eye meets the shared categories
+            first. Counts come from the member's WHOLE list (pre-tab), so a
+            chip never shows a number the tab row is about to contradict. */}
+        <View style={styles.chipBar}>
+          {CATEGORIES.map((c) => {
+            const active = category === c.key;
+            const count = categoryCounts[c.key];
+
+            return (
+              <AppPress
+                key={c.key}
+                style={[styles.chip, active && styles.chipActive]}
+                onPress={() => setCategory(c.key)}
+              >
+                <Text
+                  style={[styles.chipText, active && styles.chipTextActive]}
+                >
+                  {c.label}
+                </Text>
+
+                <Text
+                  style={[styles.chipCount, active && styles.chipCountActive]}
+                >
+                  {count}
+                </Text>
+              </AppPress>
+            );
+          })}
         </View>
 
         <ScrollView
@@ -442,6 +498,22 @@ const styles = StyleSheet.create({
   filterChipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
   filterChipText: { fontSize: 12, fontWeight: '700', color: COLORS.textSoft },
   filterChipTextActive: { color: '#FFFFFF' },
+
+  // Category chips - same pill geometry as the tabs below and the same
+  // navy-active / orange-count treatment as tasks.tsx, so the two rows read
+  // as one filter block rather than two competing controls.
+  chipBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderWidth: 1, borderColor: COLORS.border,
+    backgroundColor: COLORS.card, borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 7,
+  },
+  chipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
+  chipText: { color: COLORS.text, fontSize: 12, fontWeight: '700' },
+  chipTextActive: { color: '#FFFFFF' },
+  chipCount: { color: COLORS.textFaint, fontSize: 11, fontWeight: '900' },
+  chipCountActive: { color: COLORS.orange },
 
   taskCard: {
     backgroundColor: COLORS.card, borderRadius: 14, padding: 14,

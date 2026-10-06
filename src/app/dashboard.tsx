@@ -669,9 +669,9 @@ const StatusRow = memo(function StatusRow({
         />
 
         <BottomNavItem
-          icon="clipboard-outline"
-          label="Tasks"
-          onPress={() => navReplace('/tasks')}
+          icon="analytics-outline"
+          label="Production"
+          onPress={() => navReplace('/production')}
         />
 
         <BottomNavItem
